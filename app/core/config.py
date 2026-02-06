@@ -1,24 +1,102 @@
 from __future__ import annotations
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import List
+import os
+from typing import List, Optional
+from pydantic import BaseSettings
+
+
+def normalize_db_url(url: str) -> str:
+    """
+    Railway may provide:
+      postgres://user:pass@host/db
+
+    SQLAlchemy + psycopg3 requires:
+      postgresql+psycopg://user:pass@host/db
+    """
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql://", 1)
+
+    if url.startswith("postgresql://") and "+psycopg" not in url:
+        url = url.replace("postgresql://", "postgresql+psycopg://", 1)
+
+    return url
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    # -------------------
+    # Environment
+    # -------------------
+    ENV: str = os.getenv("ENV", "development")
 
-    DATABASE_URL: str = "postgresql+psycopg://postgres:postgres@localhost:5432/police_accountability"
-    CORS_ORIGINS: str = "http://localhost:5173"
-    UPLOAD_DIR: str = "./data/uploads"
+    # -------------------
+    # Security
+    # -------------------
+    SECRET_KEY: str = os.getenv("SECRET_KEY", "dev-change-this-secret")
+    PUBLIC_INTAKE_KEY: str = os.getenv(
+        "PUBLIC_INTAKE_KEY", "dev-public-intake-key-change-me"
+    )
 
-    EMAIL_FROM: str = "alerts@potc.local"
-    EMAIL_TO: str = "laila@potcsd.org"
-    EMAIL_MODE: str = "console"  # console | smtp
-    SMTP_HOST: str = ""
-    SMTP_PORT: int = 587
-    SMTP_USER: str = ""
-    SMTP_PASS: str = ""
+    # -------------------
+    # Database
+    # -------------------
+    DATABASE_URL: Optional[str] = os.getenv("DATABASE_URL")
 
+    # -------------------
+    # CORS
+    # -------------------
+    # Comma-separated list of allowed origins
+    # Example:
+    #   http://localhost:5173,https://copstopsd.vercel.app
+    CORS_ORIGINS: str = os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000",
+    )
+
+    # -------------------
+    # Email (optional)
+    # -------------------
+    SMTP_HOST: Optional[str] = os.getenv("SMTP_HOST")
+    SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
+    SMTP_USER: Optional[str] = os.getenv("SMTP_USER")
+    SMTP_PASSWORD: Optional[str] = os.getenv("SMTP_PASSWORD")
+    FROM_EMAIL: Optional[str] = os.getenv("FROM_EMAIL")
+    STAFF_NOTIFICATION_EMAIL: Optional[str] = os.getenv(
+        "STAFF_NOTIFICATION_EMAIL"
+    )
+
+    # -------------------
+    # Auth / OTP
+    # -------------------
+    RESET_OTP_EXPIRE_MINUTES: int = int(
+        os.getenv("RESET_OTP_EXPIRE_MINUTES", "10")
+    )
+
+    class Config:
+        case_sensitive = True
+
+    # -------------------
+    # Helpers
+    # -------------------
     def cors_list(self) -> List[str]:
-        return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+        """
+        Returns cleaned list of allowed CORS origins.
+        """
+        if not self.CORS_ORIGINS:
+            return []
+
+        return [
+            origin.strip()
+            for origin in self.CORS_ORIGINS.split(",")
+            if origin.strip()
+        ]
+
 
 settings = Settings()
+
+# -------------------
+# Final validation / normalization
+# -------------------
+if not settings.DATABASE_URL:
+    raise RuntimeError("DATABASE_URL is not set (required for Railway)")
+
+settings.DATABASE_URL = normalize_db_url(settings.DATABASE_URL)
