@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+env/
+venv/
+
+# Environment variables
+.env
+
+# Alembic temp files
+alembic.ini.save
+
+# Database files
+*.db
+*.sqlite
+
+# OS
+.DS_Store
+
+# Logs
+*.log
+
