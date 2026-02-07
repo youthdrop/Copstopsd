@@ -17,6 +17,10 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from sqlalchemy import String
+from sqlalchemy.orm import Mapped, mapped_column
+
+full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
 
 # -----------------------------
@@ -27,6 +31,7 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # IMPORTANT:
     # Your DB does NOT have users.hashed_password (error proves it).
@@ -54,7 +59,7 @@ class User(Base):
     @hashed_password.setter
     def hashed_password(self, value: str) -> None:
         self.password_hash = value
-        
+
     otp_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     otp_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
