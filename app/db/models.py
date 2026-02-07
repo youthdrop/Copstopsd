@@ -17,10 +17,6 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
-from sqlalchemy import String
-from sqlalchemy.orm import Mapped, mapped_column
-
-full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
 
 # -----------------------------
@@ -31,19 +27,17 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
-    full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
-    # IMPORTANT:
-    # Your DB does NOT have users.hashed_password (error proves it).
+    # ✅ this is the only place full_name should exist
+    full_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
     # Most likely it has users.password_hash, so we map to that.
     password_hash: Mapped[str] = mapped_column(String(255))
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -74,13 +68,9 @@ class ComplaintOfficer(Base):
     complaint_id: Mapped[int] = mapped_column(ForeignKey("complaints.id"), index=True)
     officer_id: Mapped[int] = mapped_column(ForeignKey("officers.id"), index=True)
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    __table_args__ = (
-        UniqueConstraint("complaint_id", "officer_id", name="uq_complaint_officer"),
-    )
+    __table_args__ = (UniqueConstraint("complaint_id", "officer_id", name="uq_complaint_officer"),)
 
 
 # -----------------------------
@@ -106,9 +96,7 @@ class Complaint(Base):
     narrative: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(64), default="open")
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -122,9 +110,6 @@ class Complaint(Base):
         lazy="selectin",
     )
 
-    # NOTE:
-    # This relationship is viewonly and keyed on entity_type/entity_id.
-    # We removed CaseNote.is_deleted from the model because your DB doesn't have it.
     case_notes: Mapped[list["CaseNote"]] = relationship(
         "CaseNote",
         primaryjoin="and_(CaseNote.entity_type=='complaint', foreign(CaseNote.entity_id)==Complaint.id)",
@@ -148,9 +133,7 @@ class Officer(Base):
     department: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     unit: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -187,10 +170,6 @@ class CaseNote(Base):
     note_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     note_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    __table_args__ = (
-        UniqueConstraint("id", name="uq_case_notes_id"),
-    )
+    __table_args__ = (UniqueConstraint("id", name="uq_case_notes_id"),)
