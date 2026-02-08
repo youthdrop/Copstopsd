@@ -44,6 +44,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],  # must allow Content-Type, Authorization, X-Staff-Key
 )
+from fastapi import Response
+
+@app.options("/{full_path:path}")
+def preflight(full_path: str):
+    return Response(status_code=204)
 
 # ---- Errors ----
 @app.exception_handler(Exception)
