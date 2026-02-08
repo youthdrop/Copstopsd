@@ -144,7 +144,6 @@ class CaseNote(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
 
-    # "complaint" or "officer"
     entity_type: Mapped[str] = mapped_column(String(32), index=True)
     entity_id: Mapped[int] = mapped_column(Integer, index=True)
 
@@ -155,8 +154,4 @@ class CaseNote(Base):
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
+    # ✅ DO NOT define updated_at because the DB table does not have it
