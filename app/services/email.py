@@ -72,3 +72,4 @@ View complaint:
         raise RuntimeError("STAFF_NOTIFICATION_EMAIL not configured (or SMTP_USER missing)")
 
     _send_email(subject, staff_email, body)
+
