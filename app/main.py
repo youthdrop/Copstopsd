@@ -10,21 +10,12 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.core.config import settings
 from app.api.router import router as api_router
 
+app = FastAPI(title="Police Accountability API", version="0.1.0")
 
-# ---------------------------------------
-# Create ONE FastAPI app
-# ---------------------------------------
-app = FastAPI(
-    title="Police Accountability API",
-    version="0.1.0",
-)
-
-
-# ---------------------------------------
-# CORS Configuration
-# ---------------------------------------
+# ---- CORS ----
 origins: List[str] = [
     "https://copstopsd.org",
     "https://www.copstopsd.org",
@@ -32,41 +23,39 @@ origins: List[str] = [
     "http://127.0.0.1:5173",
 ]
 
-# Allow Railway environment override
-env_origins = os.getenv("CORS_ORIGINS")
+# Optional: Railway env var: CORS_ORIGINS="https://copstopsd.org,https://www.copstopsd.org"
+env_origins = (os.getenv("CORS_ORIGINS") or "").strip()
 if env_origins:
     origins = [o.strip() for o in env_origins.split(",") if o.strip()]
+
+# Also include anything from settings.cors_list()
+for o in (settings.cors_list() or []):
+    if o and o.strip() and o.strip() not in origins:
+        origins.append(o.strip())
+
+# Allow Vercel preview domains (optional)
+vercel_origin_regex = r"^https:\/\/([a-z0-9-]+\.)*vercel\.app$"
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_origin_regex=r"^https:\/\/([a-z0-9-]+\.)*vercel\.app$",
+    allow_origin_regex=vercel_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*"],  # must allow Content-Type, Authorization, X-Staff-Key
 )
 
-
-# ---------------------------------------
-# Global error handler
-# ---------------------------------------
+# ---- Errors ----
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     return JSONResponse(
         status_code=500,
-        content={"detail": f"{type(exc).__name__}: {exc}"},
+        content={"detail": f"Internal Server Error: {type(exc).__name__}: {exc}"},
     )
 
-
-# ---------------------------------------
-# API routes
-# ---------------------------------------
+# ---- Routes ----
 app.include_router(api_router)
 
-
-# ---------------------------------------
-# Health check (Railway)
-# ---------------------------------------
 @app.get("/health")
 def health():
     return {"ok": True}
