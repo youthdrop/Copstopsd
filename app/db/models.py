@@ -163,3 +163,5 @@ class CaseNote(Base):
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     # ✅ DO NOT define updated_at because the DB table does not have it
+
+# rebuild
