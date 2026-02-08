@@ -6,11 +6,12 @@ from email.message import EmailMessage
 # ---------------------------
 # Email config
 # ---------------------------
-SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USER = os.getenv("SMTP_USER")  # example: yourname@gmail.com
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")  # app password
-FROM_EMAIL = os.getenv("FROM_EMAIL", SMTP_USER)
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=laila@potcsd.org
+SMTP_PASS=gzup tsnm lods mcwa
+EMAIL_FROM=laila@potcsd.org
+
 
 
 def _send_email(subject: str, to_email: str, body: str) -> None:

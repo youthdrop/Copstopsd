@@ -13,6 +13,10 @@ from argon2.exceptions import VerifyMismatchError
 
 from app.db.session import get_db
 from app.db.models import User
+import os
+
+print("DEPLOY_SHA", os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_COMMIT_SHA") or "unknown")
+
 
 # Optional: if you later wire up SMTP in app/services/email.py
 try:
