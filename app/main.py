@@ -12,7 +12,15 @@ from fastapi.responses import JSONResponse
 
 from app.api.router import router as api_router
 
+from fastapi import Response
+
 app = FastAPI(title="Police Accountability API", version="0.1.0")
+APP_BUILD_ID = "CORS_FIX_2026_02_07_1"
+
+
+@app.options("/{path:path}")
+def preflight(path: str):
+    return Response(status_code=204)
 
 # -------------------------
 # CORS
@@ -67,3 +75,7 @@ app.include_router(api_router)
 @app.get("/health")
 def health():
     return {"ok": True}
+
+@app.get("/build")
+def build():
+    return {"build": APP_BUILD_ID}
