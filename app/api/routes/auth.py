@@ -17,13 +17,11 @@ import os
 
 print("DEPLOY_SHA", os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_COMMIT_SHA") or "unknown")
 
-
 # Optional: if you later wire up SMTP in app/services/email.py
 try:
     from app.services.email import send_otp_email  # type: ignore
 except Exception:
     send_otp_email = None
-
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -122,7 +120,6 @@ def send_otp(email: str, code: str) -> None:
         print(f"[DEV OTP] {email} → {code}")
 
 
-
 def make_access_token(user_id: int) -> str:
     # MVP token; replace with JWT later
     return f"dev-token-{user_id}"
@@ -153,12 +150,16 @@ def register(
     if existing:
         raise HTTPException(status_code=400, detail="Email already in use")
 
+    now = utcnow()
+
     user = User(
         email=email,
         password_hash=hash_password(payload.password),
         full_name=(payload.full_name or "").strip() or None,
         is_active=True,
         is_verified=False,
+        created_at=now,   # ✅ ensures created_at is not null if DB requires it
+        updated_at=now,   # ✅ FIX: DB requires updated_at NOT NULL
     )
 
     db.add(user)
@@ -166,7 +167,6 @@ def register(
     db.refresh(user)
 
     return {"ok": True}
-
 
 
 @router.post("/login", response_model=LoginOut)
@@ -183,7 +183,6 @@ def login(payload: LoginIn, db: Session = Depends(get_db)):
     if not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    # Create OTP (always timezone-aware UTC)
     otp = generate_otp()
     user.otp_hash = ph.hash(otp)
     user.otp_expires_at = utcnow() + timedelta(minutes=OTP_EXPIRE_MINUTES)
@@ -201,17 +200,14 @@ def verify_otp(payload: VerifyOtpIn, db: Session = Depends(get_db)):
 
     user = db.query(User).filter(User.email == email).first()
     if not user or not user.otp_hash or not user.otp_expires_at:
-        # Avoid leaking whether the user exists
         raise HTTPException(status_code=401, detail="OTP not requested")
 
-    # Defensive: DB may return naive dt even if you intended timezone-aware
     expires_at = ensure_aware_utc(user.otp_expires_at)
     if not expires_at:
         raise HTTPException(status_code=401, detail="OTP not requested")
 
     now = utcnow()
     if now > expires_at:
-        # Clear stale OTP so user can request again cleanly
         _clear_otp(user)
         db.commit()
         raise HTTPException(status_code=401, detail="OTP expired")
@@ -226,7 +222,6 @@ def verify_otp(payload: VerifyOtpIn, db: Session = Depends(get_db)):
     if not ok:
         raise HTTPException(status_code=401, detail="Invalid code")
 
-    # Success: clear OTP and mark verified
     _clear_otp(user)
     user.is_verified = True
     db.commit()
