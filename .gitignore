@@ -25,3 +25,6 @@ alembic.ini.save
 # Logs
 *.log
 
+
+__pycache__/
+*.pyc
