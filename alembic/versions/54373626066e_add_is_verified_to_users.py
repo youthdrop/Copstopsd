@@ -10,17 +10,11 @@ branch_labels = None
 depends_on = None
 
 
-def upgrade():
-    op.add_column(
-        "users",
-        sa.Column(
-            "is_verified",
-            sa.Boolean(),
-            nullable=False,
-            server_default=sa.false(),
-        ),
-    )
+def upgrade() -> None:
+    # no-op: handled in later consolidated migration
+    pass
+
+def downgrade() -> None:
+    pass
 
 
-def downgrade():
-    op.drop_column("users", "is_verified")

@@ -122,6 +122,7 @@ def make_access_token(user_id: int) -> str:
 def _clear_otp(user: User) -> None:
     user.otp_hash = None
     user.otp_expires_at = None
+    user.otp_requested_at = None
 
 
 # -------------------------
@@ -141,9 +142,8 @@ def register(payload: RegisterIn, db: Session = Depends(get_db)):
         full_name=(payload.full_name or "").strip() or None,
         is_active=True,
         is_verified=False,
-        otp_hash=None,
-        otp_expires_at=None,
-        created_at=utcnow(),
+        # created_at is server_default in model; setting it manually is optional
+        # created_at=utcnow(),
     )
 
     db.add(user)
@@ -171,6 +171,7 @@ def login(payload: LoginIn, db: Session = Depends(get_db)):
     otp = generate_otp()
     user.otp_hash = ph.hash(otp)
     user.otp_expires_at = utcnow() + timedelta(minutes=OTP_EXPIRE_MINUTES)
+    user.otp_requested_at = utcnow()
     db.commit()
 
     send_otp(user.email, otp)
