@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 import random
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Header
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
@@ -105,17 +105,22 @@ def generate_otp() -> str:
 
 def send_otp(email: str, code: str) -> None:
     """
-    If SMTP/email is wired up, send a real email.
-    Otherwise print to terminal as a dev fallback.
+    Send real email if configured; otherwise dev fallback.
+    IMPORTANT: log why it fails (don't silently swallow).
     """
-    if send_otp_email:
-        try:
-            send_otp_email(email, code)
-            return
-        except Exception:
-            pass
+    if send_otp_email is None:
+        print("[OTP EMAIL] send_otp_email import is None (app.services.email import failed)")
+        print(f"[DEV OTP] {email} → {code}")
+        return
 
-    print(f"[DEV OTP] {email} → {code}")
+    try:
+        send_otp_email(email, code)
+        print(f"[OTP EMAIL SENT] {email}")
+        return
+    except Exception as e:
+        print(f"[OTP EMAIL ERROR] {type(e).__name__}: {e}")
+        print(f"[DEV OTP] {email} → {code}")
+
 
 
 def make_access_token(user_id: int) -> str:
@@ -133,7 +138,15 @@ def _clear_otp(user: User) -> None:
 # Routes
 # -------------------------
 @router.post("/register")
-def register(payload: RegisterIn, db: Session = Depends(get_db)):
+def register(
+    payload: RegisterIn,
+    db: Session = Depends(get_db),
+    x_staff_key: str | None = Header(default=None, alias="X-Staff-Key"),
+):
+    staff_key = os.getenv("STAFF_KEY")
+    if not staff_key or x_staff_key != staff_key:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
     email = normalize_email(payload.email)
 
     existing = db.query(User).filter(User.email == email).first()
@@ -146,8 +159,6 @@ def register(payload: RegisterIn, db: Session = Depends(get_db)):
         full_name=(payload.full_name or "").strip() or None,
         is_active=True,
         is_verified=False,
-        # created_at is server_default in model; setting it manually is optional
-        # created_at=utcnow(),
     )
 
     db.add(user)
@@ -155,6 +166,7 @@ def register(payload: RegisterIn, db: Session = Depends(get_db)):
     db.refresh(user)
 
     return {"ok": True}
+
 
 
 @router.post("/login", response_model=LoginOut)
