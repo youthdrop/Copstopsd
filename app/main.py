@@ -14,29 +14,48 @@ from app.core.config import settings
 from app.api.router import router as api_router
 
 
+# ---------------------------------------
+# App
+# ---------------------------------------
 app = FastAPI(
     title="Police Accountability API",
     version="0.1.0",
 )
 
+
 # ---------------------------------------
-# CORS (Local + Vercel + custom domains)
+# CORS (Local + custom domain + Vercel)
 # ---------------------------------------
-# Keep your dev origins
-VITE_ORIGINS: List[str] = [
+# Always-allowed dev origins
+DEV_ORIGINS: List[str] = [
     "http://127.0.0.1:5173",
     "http://localhost:5173",
     "http://localhost:3000",
 ]
 
-# Pull configured origins from settings (comma-separated)
+# Always-allowed prod origins (your custom domain)
+PROD_ORIGINS: List[str] = [
+    "https://copstopsd.org",
+    "https://www.copstopsd.org",
+]
+
+# Optional: Railway env var CORS_ORIGINS="https://copstopsd.org,https://www.copstopsd.org"
+env_origins = (os.getenv("CORS_ORIGINS") or "").strip()
+ENV_ORIGINS: List[str] = [o.strip() for o in env_origins.split(",") if o.strip()] if env_origins else []
+
+# Optional: a single explicit frontend URL
+# Example: FRONTEND_URL="https://your-app.vercel.app"
+frontend_url = (os.getenv("FRONTEND_URL") or "").strip()
+FRONTEND_ORIGINS: List[str] = [frontend_url] if frontend_url else []
+
+# From your settings helper (comma-separated or list)
 settings_origins = settings.cors_list() or []
 
-# Merge, de-dupe, and normalize
+# Merge + de-dupe
 merged: List[str] = []
 seen = set()
 
-for o in (settings_origins + VITE_ORIGINS):
+for o in (PROD_ORIGINS + DEV_ORIGINS + ENV_ORIGINS + FRONTEND_ORIGINS + settings_origins):
     if not o:
         continue
     o = o.strip()
@@ -44,21 +63,10 @@ for o in (settings_origins + VITE_ORIGINS):
         seen.add(o)
         merged.append(o)
 
-# OPTIONAL: allow a single explicit frontend URL (recommended)
-# Example Railway variable: FRONTEND_URL=https://your-app.vercel.app
-frontend_url = (os.getenv("FRONTEND_URL") or "").strip()
-if frontend_url and frontend_url not in seen:
-    merged.append(frontend_url)
-    seen.add(frontend_url)
-
-# Vercel preview domains must be allowed via regex (wildcards not supported in allow_origins)
-# This regex allows:
-# - https://anything.vercel.app
-# - https://anything-username.vercel.app
+# Allow Vercel preview domains (wildcards not supported in allow_origins)
 vercel_origin_regex = r"^https:\/\/([a-z0-9-]+\.)*vercel\.app$"
 
-# If someone configured "*" in settings, you cannot use credentials with it.
-# We preserve your safety behavior from the current file. :contentReference[oaicite:1]{index=1}
+# If "*" configured anywhere, you cannot use credentials
 if "*" in seen:
     app.add_middleware(
         CORSMiddleware,
@@ -71,14 +79,15 @@ else:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=merged,
-        allow_origin_regex=vercel_origin_regex,  # ✅ makes Vercel work
+        allow_origin_regex=vercel_origin_regex,
         allow_credentials=True,
         allow_methods=["*"],
-        allow_headers=["*"],
+        allow_headers=["*"],  # must allow Content-Type, Authorization, X-Staff-Key
     )
 
+
 # ---------------------------------------
-# Global error handler (keeps your current behavior)
+# Global error handler
 # ---------------------------------------
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
@@ -87,10 +96,12 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         content={"detail": f"Internal Server Error: {type(exc).__name__}: {exc}"},
     )
 
+
 # ---------------------------------------
 # API routes
 # ---------------------------------------
 app.include_router(api_router)
+
 
 # ---------------------------------------
 # Health check (Railway)
