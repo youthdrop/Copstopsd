@@ -6,16 +6,17 @@ load_dotenv()
 import os
 from typing import List
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.core.config import settings
 from app.api.router import router as api_router
 
 app = FastAPI(title="Police Accountability API", version="0.1.0")
 
-# ---- CORS ----
+# -------------------------
+# CORS
+# -------------------------
 origins: List[str] = [
     "https://copstopsd.org",
     "https://www.copstopsd.org",
@@ -23,17 +24,13 @@ origins: List[str] = [
     "http://127.0.0.1:5173",
 ]
 
-# Optional: Railway env var: CORS_ORIGINS="https://copstopsd.org,https://www.copstopsd.org"
+# Optional: Railway env var
+# CORS_ORIGINS="https://copstopsd.org,https://www.copstopsd.org"
 env_origins = (os.getenv("CORS_ORIGINS") or "").strip()
 if env_origins:
     origins = [o.strip() for o in env_origins.split(",") if o.strip()]
 
-# Also include anything from settings.cors_list()
-for o in (settings.cors_list() or []):
-    if o and o.strip() and o.strip() not in origins:
-        origins.append(o.strip())
-
-# Allow Vercel preview domains (optional)
+# Allow Vercel preview domains if needed
 vercel_origin_regex = r"^https:\/\/([a-z0-9-]+\.)*vercel\.app$"
 
 app.add_middleware(
@@ -44,13 +41,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],  # must allow Content-Type, Authorization, X-Staff-Key
 )
-from fastapi import Response
 
+# -------------------------
+# HARD STOP: Always succeed OPTIONS (fixes preflight 400)
+# -------------------------
 @app.options("/{full_path:path}")
 def preflight(full_path: str):
     return Response(status_code=204)
 
-# ---- Errors ----
+# -------------------------
+# Error handler
+# -------------------------
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     return JSONResponse(
@@ -58,7 +59,9 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         content={"detail": f"Internal Server Error: {type(exc).__name__}: {exc}"},
     )
 
-# ---- Routes ----
+# -------------------------
+# Routes
+# -------------------------
 app.include_router(api_router)
 
 @app.get("/health")
