@@ -22,6 +22,7 @@ router = APIRouter(prefix="/public", tags=["public"])
 
 # -------------------------
 # Existing WEB public intake
+# Endpoint: POST /public/complaints
 # -------------------------
 @router.post("/complaints")
 def submit_public_complaint(
@@ -47,100 +48,6 @@ def submit_public_complaint(
         narrative=payload.narrative,
         status="open",
     )
-
-    from datetime import date
-from pydantic import BaseModel
-
-
-class ComplaintMobileIntake(BaseModel):
-    complainant_first_name: str
-    complainant_last_name: str
-    complainant_phone: str
-    stop_date: date
-    narrative: str
-
-
-@router.post("/intake")
-def submit_mobile_intake(
-    payload: ComplaintMobileIntake,
-    db: Session = Depends(get_db),
-):
-    complaint = models.Complaint(
-        case_number=generate_case_number(),
-        source="mobile_public",
-        complainant_first_name=payload.complainant_first_name.strip(),
-        complainant_last_name=payload.complainant_last_name.strip(),
-        stop_date=payload.stop_date,
-        narrative=payload.narrative.strip(),
-        status="open",
-    )
-
-    phone = payload.complainant_phone.strip()
-    if phone:
-        if hasattr(models.Complaint, "complainant_phone"):
-            setattr(complaint, "complainant_phone", phone)
-        else:
-            complaint.narrative = f"PHONE: {phone}\n\n{complaint.narrative}"
-
-    db.add(complaint)
-    db.commit()
-    db.refresh(complaint)
-
-    return {
-        "ok": True,
-        "case_number": complaint.case_number,
-        "complaint_id": complaint.id,
-    }
-
-class ComplaintMobileIntake(BaseModel):
-    complainant_first_name: str
-    complainant_last_name: str
-    complainant_phone: str
-    stop_date: date
-    narrative: str
-
-
-@router.post("/intake")
-def submit_mobile_intake(
-    payload: ComplaintMobileIntake,
-    db: Session = Depends(get_db),
-):
-    complaint = models.Complaint(
-        case_number=generate_case_number(),
-        source="mobile_public",
-        complainant_first_name=payload.complainant_first_name.strip(),
-        complainant_last_name=payload.complainant_last_name.strip(),
-        stop_date=payload.stop_date,
-        narrative=(payload.narrative or "").strip(),
-        status="open",
-    )
-
-    phone = (payload.complainant_phone or "").strip()
-    if phone:
-        # Save to column if it exists; otherwise prepend to narrative
-        if hasattr(models.Complaint, "complainant_phone"):
-            try:
-                setattr(complaint, "complainant_phone", phone)
-            except Exception:
-                complaint.narrative = f"PHONE: {phone}\n\n{complaint.narrative}"
-        else:
-            complaint.narrative = f"PHONE: {phone}\n\n{complaint.narrative}"
-
-    db.add(complaint)
-    db.commit()
-    db.refresh(complaint)
-
-    if send_new_submission_email:
-        try:
-            send_new_submission_email(
-                case_number=complaint.case_number,
-                summary=(complaint.narrative or "")[:500],
-                link=f"/complaints/{complaint.id}",
-            )
-        except Exception:
-            pass
-
-    return {"ok": True, "case_number": complaint.case_number, "complaint_id": complaint.id}
 
     # Optional officer linking
     if getattr(payload, "officer_ids", None):
@@ -174,12 +81,14 @@ def submit_mobile_intake(
 
 
 # -------------------------
-# NEW MOBILE public intake (minimal fields)
+# NEW MOBILE public intake (minimal fields + REQUIRED department)
+# Endpoint: POST /public/intake
 # -------------------------
 class ComplaintMobileIntake(BaseModel):
     complainant_first_name: str
     complainant_last_name: str
     complainant_phone: str
+    department: str  # ✅ REQUIRED (DB not-null)
     stop_date: date
     narrative: str
 
@@ -189,27 +98,26 @@ def submit_mobile_intake(
     payload: ComplaintMobileIntake,
     db: Session = Depends(get_db),
 ):
-    # Create complaint with minimal fields
+    phone = (payload.complainant_phone or "").strip()
+    dept = (payload.department or "").strip()
+
     complaint = models.Complaint(
         case_number=generate_case_number(),
         source="mobile_public",
         complainant_first_name=payload.complainant_first_name.strip(),
         complainant_last_name=payload.complainant_last_name.strip(),
         stop_date=payload.stop_date,
-        narrative=payload.narrative.strip(),
+        department=dept,  # ✅ fixes NotNullViolation
+        narrative=(payload.narrative or "").strip(),
         status="open",
     )
 
-    # Phone handling:
-    # If your DB model has complainant_phone, save it there.
-    # If not, we prepend it to narrative so we never crash on missing column.
-    phone = (payload.complainant_phone or "").strip()
+    # Save phone if column exists; otherwise store in narrative so we never crash
     if phone:
         if hasattr(models.Complaint, "complainant_phone"):
             try:
                 setattr(complaint, "complainant_phone", phone)
             except Exception:
-                # fallback if mapping differs
                 complaint.narrative = f"PHONE: {phone}\n\n{complaint.narrative}"
         else:
             complaint.narrative = f"PHONE: {phone}\n\n{complaint.narrative}"
