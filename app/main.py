@@ -11,16 +11,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.router import router as api_router
+from app.api.routes import public
 
 app = FastAPI(title="Police Accountability API", version="0.1.0")
 
 # Bump this any time you redeploy so we can verify the server updated
-APP_BUILD_ID = "CORS_FIX_2026_02_07_2"
+APP_BUILD_ID = "PUBLIC_INTAKE_FIX_2026_02_08_2"
 
 # -------------------------
 # CORS
 # -------------------------
-# Allow your known production origins + local dev.
 origins: List[str] = [
     "https://copstopsd.org",
     "https://www.copstopsd.org",
@@ -29,25 +29,19 @@ origins: List[str] = [
     "http://127.0.0.1:5173",
 ]
 
-# Optional: Railway env var override
-# Example: CORS_ORIGINS="https://copstopsd.org,https://www.copstopsd.org,https://<your-vercel-app>.vercel.app"
 env_origins = (os.getenv("CORS_ORIGINS") or "").strip()
 if env_origins:
     origins = [o.strip() for o in env_origins.split(",") if o.strip()]
 
-# Allow Vercel preview domains too (any *.vercel.app)
 vercel_origin_regex = r"^https:\/\/.*\.vercel\.app$"
 
-# ✅ IMPORTANT:
-# Do NOT define your own @app.options routes.
-# CORSMiddleware must handle preflight so it can attach Access-Control-Allow-* headers.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_origin_regex=vercel_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],  # includes Content-Type, Authorization, X-Staff-Key
+    allow_headers=["*"],
 )
 
 # -------------------------
@@ -63,7 +57,9 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 # -------------------------
 # Routes
 # -------------------------
+# Include routers AFTER app is created
 app.include_router(api_router)
+app.include_router(public.router)  # ✅ enables /public/complaints and /public/intake
 
 @app.get("/health")
 def health():
