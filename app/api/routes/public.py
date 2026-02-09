@@ -47,6 +47,51 @@ def submit_public_complaint(
         narrative=payload.narrative,
         status="open",
     )
+
+    from datetime import date
+from pydantic import BaseModel
+
+
+class ComplaintMobileIntake(BaseModel):
+    complainant_first_name: str
+    complainant_last_name: str
+    complainant_phone: str
+    stop_date: date
+    narrative: str
+
+
+@router.post("/intake")
+def submit_mobile_intake(
+    payload: ComplaintMobileIntake,
+    db: Session = Depends(get_db),
+):
+    complaint = models.Complaint(
+        case_number=generate_case_number(),
+        source="mobile_public",
+        complainant_first_name=payload.complainant_first_name.strip(),
+        complainant_last_name=payload.complainant_last_name.strip(),
+        stop_date=payload.stop_date,
+        narrative=payload.narrative.strip(),
+        status="open",
+    )
+
+    phone = payload.complainant_phone.strip()
+    if phone:
+        if hasattr(models.Complaint, "complainant_phone"):
+            setattr(complaint, "complainant_phone", phone)
+        else:
+            complaint.narrative = f"PHONE: {phone}\n\n{complaint.narrative}"
+
+    db.add(complaint)
+    db.commit()
+    db.refresh(complaint)
+
+    return {
+        "ok": True,
+        "case_number": complaint.case_number,
+        "complaint_id": complaint.id,
+    }
+
 class ComplaintMobileIntake(BaseModel):
     complainant_first_name: str
     complainant_last_name: str
