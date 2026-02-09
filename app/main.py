@@ -16,7 +16,8 @@ from app.api.routes import public
 app = FastAPI(title="Police Accountability API", version="0.1.0")
 
 # Bump this any time you redeploy so we can verify the server updated
-APP_BUILD_ID = "PUBLIC_INTAKE_FIX_2026_02_08_2"
+APP_BUILD_ID = "PUBLIC_INTAKE_FIX_2026_02_08_3"
+
 
 # -------------------------
 # CORS
