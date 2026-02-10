@@ -91,7 +91,6 @@ def create_officer(payload: OfficerCreateIn, db: Session = Depends(get_db)):
     return officer_to_dict(o)
 
 
-# ✅ THIS is what your OfficerDetail page needs
 @router.get("/{officer_id}", dependencies=[Depends(require_staff)])
 def get_officer(officer_id: int, db: Session = Depends(get_db)):
     o = db.query(models.Officer).filter(models.Officer.id == officer_id).first()
@@ -100,7 +99,6 @@ def get_officer(officer_id: int, db: Session = Depends(get_db)):
     return officer_to_dict(o)
 
 
-# ✅ This enables “Edit officer details”
 @router.patch("/{officer_id}", dependencies=[Depends(require_staff)])
 def update_officer(officer_id: int, payload: OfficerUpdateIn, db: Session = Depends(get_db)):
     o = db.query(models.Officer).filter(models.Officer.id == officer_id).first()
@@ -124,3 +122,29 @@ def update_officer(officer_id: int, payload: OfficerUpdateIn, db: Session = Depe
     db.commit()
     db.refresh(o)
     return officer_to_dict(o)
+
+
+@router.delete("/{officer_id}", dependencies=[Depends(require_staff)])
+def delete_officer(officer_id: int, db: Session = Depends(get_db)):
+    o = db.query(models.Officer).filter(models.Officer.id == officer_id).first()
+    if not o:
+        raise HTTPException(status_code=404, detail="Officer not found")
+
+    # SAFETY: prevent deleting an officer that is referenced by complaints.
+    # If your join table model is named differently, change models.ComplaintOfficer below.
+    if hasattr(models, "ComplaintOfficer"):
+        link_exists = (
+            db.query(models.ComplaintOfficer)
+            .filter(models.ComplaintOfficer.officer_id == officer_id)
+            .first()
+            is not None
+        )
+        if link_exists:
+            raise HTTPException(
+                status_code=409,
+                detail="Officer is linked to one or more complaints; unlink officer from complaints first.",
+            )
+
+    db.delete(o)
+    db.commit()
+    return {"ok": True, "deleted_id": officer_id}

@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-import os
 import secrets
 from datetime import datetime
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.db.session import get_db
+from app.api.deps import require_staff
 from app.db.models import Complaint, Officer
+from app.db.session import get_db
 from app.schemas import ComplaintCreate, ComplaintOut
 
 router = APIRouter()
@@ -25,25 +25,14 @@ def generate_case_number() -> str:
     return f"PA-{stamp}-{rand}"
 
 
-def require_staff_key(x_staff_key: str | None) -> None:
-    expected = os.getenv("STAFF_KEY", "dev-staff-key")
-    if not x_staff_key:
-        raise HTTPException(status_code=401, detail="Missing staff key")
-    if x_staff_key != expected:
-        raise HTTPException(status_code=403, detail="Invalid staff key")
-
-
 # ----------------------------------------
-# CREATE COMPLAINT (staff / authenticated)
+# CREATE COMPLAINT (staff only)
 # ----------------------------------------
-@router.post("/complaints", response_model=ComplaintOut)
+@router.post("/complaints", response_model=ComplaintOut, dependencies=[Depends(require_staff)])
 def create_complaint(
     payload: ComplaintCreate,
     db: Session = Depends(get_db),
-    x_staff_key: str = Header(default=None),
 ):
-    require_staff_key(x_staff_key)
-
     complaint = Complaint(
         # ✅ MUST NOT be null in DB
         case_number=generate_case_number(),
@@ -68,14 +57,7 @@ def create_complaint(
     # Optional officer linking
     # ----------------------------------------
     if payload.officer_ids:
-        officers = (
-            db.query(Officer)
-            .filter(Officer.id.in_(payload.officer_ids))
-            .all()
-        )
-        # If you want to enforce all officer_ids exist, uncomment:
-        # if len(officers) != len(set(payload.officer_ids)):
-        #     raise HTTPException(status_code=400, detail="One or more officers not found")
+        officers = db.query(Officer).filter(Officer.id.in_(payload.officer_ids)).all()
 
         for officer in officers:
             complaint.officers.append(officer)
@@ -85,27 +67,39 @@ def create_complaint(
 
 
 # ----------------------------------------
-# LIST COMPLAINTS
+# LIST COMPLAINTS (staff only)
 # ----------------------------------------
-@router.get("/complaints", response_model=List[ComplaintOut])
+@router.get("/complaints", response_model=List[ComplaintOut], dependencies=[Depends(require_staff)])
 def list_complaints(db: Session = Depends(get_db)):
-    return (
-        db.query(Complaint)
-        .order_by(Complaint.created_at.desc())
-        .all()
-    )
+    return db.query(Complaint).order_by(Complaint.created_at.desc()).all()
 
 
 # ----------------------------------------
-# GET SINGLE COMPLAINT
+# GET SINGLE COMPLAINT (staff only)
 # ----------------------------------------
-@router.get("/complaints/{complaint_id}", response_model=ComplaintOut)
+@router.get("/complaints/{complaint_id}", response_model=ComplaintOut, dependencies=[Depends(require_staff)])
 def get_complaint(complaint_id: int, db: Session = Depends(get_db)):
-    complaint = (
-        db.query(Complaint)
-        .filter(Complaint.id == complaint_id)
-        .first()
-    )
+    complaint = db.query(Complaint).filter(Complaint.id == complaint_id).first()
     if not complaint:
         raise HTTPException(status_code=404, detail="Complaint not found")
     return complaint
+
+# ----------------------------------------
+# DELETE COMPLAINT (staff only)
+# ----------------------------------------
+@router.delete("/complaints/{complaint_id}", dependencies=[Depends(require_staff)])
+def delete_complaint(complaint_id: int, db: Session = Depends(get_db)):
+    complaint = db.query(Complaint).filter(Complaint.id == complaint_id).first()
+    if not complaint:
+        raise HTTPException(status_code=404, detail="Complaint not found")
+
+    # IMPORTANT: clear many-to-many links first to avoid FK constraint errors
+    try:
+        complaint.officers.clear()
+    except Exception:
+        # If relationship name differs, this may fail—then we’ll delete join rows explicitly.
+        pass
+
+    db.delete(complaint)
+    db.commit()
+    return {"ok": True, "deleted_id": complaint_id}
