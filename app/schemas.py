@@ -39,7 +39,7 @@ class ComplaintCreate(BaseModel):
     complainant_phone: Optional[str] = None
 
     stop_date: date
-    stop_time: Optional[str] = None  # ✅ NEW: "HH:MM"
+    stop_time: Optional[time] = None # ✅ NEW: "HH:MM"
 
     department: str
     unit: Optional[str] = None
