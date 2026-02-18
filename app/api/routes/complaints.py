@@ -35,11 +35,6 @@ def normalize_harm_types(
     types: Optional[List[str]] = None,
     harm_done: Optional[str] = None,
 ) -> List[str]:
-    """
-    Prefer harm_types.
-    Fallback to types (older web used "types").
-    Fallback to harm_done comma-separated string.
-    """
     raw: List[str] = []
     if harm_types:
         raw = harm_types
@@ -48,17 +43,17 @@ def normalize_harm_types(
     elif harm_done:
         raw = [x.strip() for x in harm_done.split(",") if x.strip()]
 
-    # clean + de-dupe while preserving order
-    seen = set()
+    # de-dupe, preserve order
     out: List[str] = []
+    seen = set()
     for x in raw:
         s = str(x).strip()
         if not s:
             continue
-        key = s.lower()
-        if key in seen:
+        k = s.lower()
+        if k in seen:
             continue
-        seen.add(key)
+        seen.add(k)
         out.append(s)
     return out
 
@@ -66,13 +61,12 @@ def normalize_harm_types(
 def set_officers_from_ids(db: Session, complaint: Complaint, officer_ids: Optional[List[int]]):
     if officer_ids is None:
         return
-    # replace list
     complaint.officers.clear()
     if not officer_ids:
         return
     officers = db.query(Officer).filter(Officer.id.in_(officer_ids)).all()
-    for officer in officers:
-        complaint.officers.append(officer)
+    for o in officers:
+        complaint.officers.append(o)
 
 
 @router.post("/complaints", response_model=ComplaintOut, dependencies=[Depends(require_staff)])
@@ -95,7 +89,7 @@ def create_complaint(payload: ComplaintCreate, db: Session = Depends(get_db)):
         stop_location=payload.stop_location,
         narrative=payload.narrative,
         harm_types=harms,
-        harm_done=", ".join(harms) if harms else None,
+        harm_done=", ".join(harms) if harms else (payload.harm_done or None),
     )
 
     db.add(complaint)
@@ -128,7 +122,6 @@ def update_complaint(complaint_id: int, payload: ComplaintUpdate, db: Session = 
     if not complaint:
         raise HTTPException(status_code=404, detail="Complaint not found")
 
-    # basic fields
     if payload.complainant_first_name is not None:
         complaint.complainant_first_name = payload.complainant_first_name
     if payload.complainant_last_name is not None:
@@ -162,7 +155,7 @@ def update_complaint(complaint_id: int, payload: ComplaintUpdate, db: Session = 
         complaint.harm_types = harms
         complaint.harm_done = ", ".join(harms) if harms else None
 
-    # officers (attach later)
+    # officers attach later
     if payload.officer_ids is not None:
         set_officers_from_ids(db, complaint, payload.officer_ids)
 
