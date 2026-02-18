@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime
-from typing import List, Optional, Any
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -31,6 +31,11 @@ def parse_hhmm(value: Optional[str]):
 
 
 def normalize_harm_done(value: Any) -> Optional[str]:
+    """
+    Legacy storage helper: some older clients send harm_done as a list.
+    This converts list -> JSON string. We keep this for backward compatibility,
+    but the canonical storage is complaints.harm_types (TEXT[]).
+    """
     if value is None:
         return None
     if isinstance(value, list):
@@ -40,12 +45,65 @@ def normalize_harm_done(value: Any) -> Optional[str]:
     return s or None
 
 
+def normalize_harm_types(value: Any) -> List[str]:
+    """
+    Canonical harms list for complaints.harm_types (TEXT[]).
+
+    Accepts:
+      - list[str]
+      - JSON string like '["A","B"]'
+      - comma-separated string 'A, B'
+      - None
+    """
+    if value is None:
+        return []
+
+    # list input
+    if isinstance(value, list):
+        out: List[str] = []
+        seen = set()
+        for x in value:
+            s = str(x).strip()
+            if not s:
+                continue
+            k = s.lower()
+            if k in seen:
+                continue
+            seen.add(k)
+            out.append(s)
+        return out
+
+    s = str(value).strip()
+    if not s:
+        return []
+
+    # JSON array string input
+    if s.startswith("["):
+        try:
+            arr = json.loads(s)
+            if isinstance(arr, list):
+                return normalize_harm_types(arr)
+        except Exception:
+            pass
+
+    # comma-separated fallback
+    parts = [p.strip() for p in s.split(",") if p.strip()]
+    return normalize_harm_types(parts)
+
+
+def harms_to_readable(harms: List[str]) -> Optional[str]:
+    return ", ".join(harms) if harms else None
+
+
 @router.post("/complaints")
 def submit_public_complaint(payload: ComplaintPublicCreate, db: Session = Depends(get_db)):
     name = (payload.name or "").strip()
     parts = name.split()
     first = parts[0] if parts else "Unknown"
     last = " ".join(parts[1:]) if len(parts) > 1 else "Unknown"
+
+    # Public web form might send harm_types or harm_done. Prefer harm_types.
+    harms = normalize_harm_types(getattr(payload, "harm_types", None) or getattr(payload, "harm_done", None))
 
     complaint = models.Complaint(
         case_number=generate_case_number(),
@@ -61,10 +119,16 @@ def submit_public_complaint(payload: ComplaintPublicCreate, db: Session = Depend
         stop_location=payload.stop_location,
         narrative=payload.narrative,
         status="open",
+        harm_types=harms,
+        harm_done=harms_to_readable(harms) or normalize_harm_done(getattr(payload, "harm_done", None)),
     )
 
     if getattr(payload, "officer_ids", None):
-        officers = db.query(models.Officer).filter(models.Officer.id.in_(payload.officer_ids)).all()
+        officers = (
+            db.query(models.Officer)
+            .filter(models.Officer.id.in_(payload.officer_ids))
+            .all()
+        )
         complaint.officers = officers
 
     db.add(complaint)
@@ -85,7 +149,7 @@ def submit_public_complaint(payload: ComplaintPublicCreate, db: Session = Depend
 
 
 # -------------------------
-# MOBILE INTAKE (no narrative)
+# MOBILE INTAKE (public)
 # -------------------------
 class ComplaintMobileIntake(BaseModel):
     complainant_first_name: str
@@ -94,13 +158,16 @@ class ComplaintMobileIntake(BaseModel):
 
     department: str
     stop_date: date
-
     stop_time: Optional[str] = None  # "HH:MM"
-    harm_done: Optional[List[str]] = None  # multi-select
+
+    # Mobile multi-select harms (list)
+    harm_done: Optional[List[str]] = None
 
 
 @router.post("/intake")
 def submit_mobile_intake(payload: ComplaintMobileIntake, db: Session = Depends(get_db)):
+    harms = normalize_harm_types(payload.harm_done)
+
     complaint = models.Complaint(
         case_number=generate_case_number(),
         source="mobile_public",
@@ -109,18 +176,12 @@ def submit_mobile_intake(payload: ComplaintMobileIntake, db: Session = Depends(g
         complainant_phone=(payload.complainant_phone or "").strip() or None,
         stop_date=payload.stop_date,
         stop_time=parse_hhmm(payload.stop_time),
-        # Normalize harms from mobile
-        harms = payload.harm_types or []
-
-        complaint = Complaint(
-            ...
-            harm_types=harms,  # ✅ Save array properly
-            harm_done=", ".join(harms) if harms else None,  # optional readable string
-        )
-
         department=(payload.department or "").strip(),
-        narrative=None,  # ✅ removed
+        narrative=None,
         status="open",
+        # ✅ key fix
+        harm_types=harms,
+        harm_done=harms_to_readable(harms),
     )
 
     db.add(complaint)
@@ -138,3 +199,4 @@ def submit_mobile_intake(payload: ComplaintMobileIntake, db: Session = Depends(g
             pass
 
     return {"ok": True, "case_number": complaint.case_number, "complaint_id": complaint.id}
+
