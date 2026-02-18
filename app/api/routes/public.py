@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from datetime import date
+import json
+from datetime import date, datetime
+from typing import List, Optional, Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -11,7 +13,6 @@ from app.db import models
 from app.schemas import ComplaintPublicCreate
 from app.utils import generate_case_number
 
-# Email sending might not be configured in production; don't let it break intake
 try:
     from app.services.email import send_new_submission_email  # type: ignore
 except Exception:
@@ -20,16 +21,27 @@ except Exception:
 router = APIRouter(prefix="/public", tags=["public"])
 
 
-# -------------------------
-# Existing WEB public intake
-# Endpoint: POST /public/complaints
-# -------------------------
+def parse_hhmm(value: Optional[str]):
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value.strip(), "%H:%M").time()
+    except Exception:
+        return None
+
+
+def normalize_harm_done(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, list):
+        cleaned = [str(x).strip() for x in value if str(x).strip()]
+        return json.dumps(cleaned) if cleaned else None
+    s = str(value).strip()
+    return s or None
+
+
 @router.post("/complaints")
-def submit_public_complaint(
-    payload: ComplaintPublicCreate,
-    db: Session = Depends(get_db),
-):
-    # Best-effort name parsing
+def submit_public_complaint(payload: ComplaintPublicCreate, db: Session = Depends(get_db)):
     name = (payload.name or "").strip()
     parts = name.split()
     first = parts[0] if parts else "Unknown"
@@ -41,7 +53,9 @@ def submit_public_complaint(
         complainant_first_name=first,
         complainant_last_name=last,
         complainant_email=payload.email,
+        complainant_phone=(payload.complainant_phone or "").strip() or None,
         stop_date=payload.stop_date,
+        stop_time=parse_hhmm(payload.stop_time),
         department=payload.department,
         unit=payload.unit,
         stop_location=payload.stop_location,
@@ -49,20 +63,14 @@ def submit_public_complaint(
         status="open",
     )
 
-    # Optional officer linking
     if getattr(payload, "officer_ids", None):
-        officers = (
-            db.query(models.Officer)
-            .filter(models.Officer.id.in_(payload.officer_ids))
-            .all()
-        )
+        officers = db.query(models.Officer).filter(models.Officer.id.in_(payload.officer_ids)).all()
         complaint.officers = officers
 
     db.add(complaint)
     db.commit()
     db.refresh(complaint)
 
-    # Notify staff (best-effort)
     if send_new_submission_email:
         try:
             send_new_submission_email(
@@ -73,72 +81,52 @@ def submit_public_complaint(
         except Exception:
             pass
 
-    return {
-        "ok": True,
-        "case_number": complaint.case_number,
-        "complaint_id": complaint.id,
-    }
+    return {"ok": True, "case_number": complaint.case_number, "complaint_id": complaint.id}
 
 
 # -------------------------
-# NEW MOBILE public intake (minimal fields + REQUIRED department)
-# Endpoint: POST /public/intake
+# MOBILE INTAKE (no narrative)
 # -------------------------
 class ComplaintMobileIntake(BaseModel):
     complainant_first_name: str
     complainant_last_name: str
-    complainant_phone: str
-    department: str  # ✅ REQUIRED (DB not-null)
+    complainant_phone: Optional[str] = None
+
+    department: str
     stop_date: date
-    narrative: str
+
+    stop_time: Optional[str] = None  # "HH:MM"
+    harm_done: Optional[List[str]] = None  # multi-select
 
 
 @router.post("/intake")
-def submit_mobile_intake(
-    payload: ComplaintMobileIntake,
-    db: Session = Depends(get_db),
-):
-    phone = (payload.complainant_phone or "").strip()
-    dept = (payload.department or "").strip()
-
+def submit_mobile_intake(payload: ComplaintMobileIntake, db: Session = Depends(get_db)):
     complaint = models.Complaint(
         case_number=generate_case_number(),
         source="mobile_public",
         complainant_first_name=payload.complainant_first_name.strip(),
         complainant_last_name=payload.complainant_last_name.strip(),
+        complainant_phone=(payload.complainant_phone or "").strip() or None,
         stop_date=payload.stop_date,
-        department=dept,  # ✅ fixes NotNullViolation
-        narrative=(payload.narrative or "").strip(),
+        stop_time=parse_hhmm(payload.stop_time),
+        harm_done=normalize_harm_done(payload.harm_done),
+        department=(payload.department or "").strip(),
+        narrative=None,  # ✅ removed
         status="open",
     )
-
-    # Save phone if column exists; otherwise store in narrative so we never crash
-    if phone:
-        if hasattr(models.Complaint, "complainant_phone"):
-            try:
-                setattr(complaint, "complainant_phone", phone)
-            except Exception:
-                complaint.narrative = f"PHONE: {phone}\n\n{complaint.narrative}"
-        else:
-            complaint.narrative = f"PHONE: {phone}\n\n{complaint.narrative}"
 
     db.add(complaint)
     db.commit()
     db.refresh(complaint)
 
-    # Notify staff (best-effort)
     if send_new_submission_email:
         try:
             send_new_submission_email(
                 case_number=complaint.case_number,
-                summary=(complaint.narrative or "")[:500],
+                summary="New mobile complaint",
                 link=f"/complaints/{complaint.id}",
             )
         except Exception:
             pass
 
-    return {
-        "ok": True,
-        "case_number": complaint.case_number,
-        "complaint_id": complaint.id,
-    }
+    return {"ok": True, "case_number": complaint.case_number, "complaint_id": complaint.id}

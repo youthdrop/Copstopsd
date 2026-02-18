@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Optional
 
 from sqlalchemy import (
@@ -8,6 +8,7 @@ from sqlalchemy import (
     Integer,
     Date,
     DateTime,
+    Time,
     Text,
     ForeignKey,
     Boolean,
@@ -25,6 +26,10 @@ from app.db.base import Base
 # User (for auth)
 # -----------------------------
 class User(Base):
+    """
+    Auth user table.
+    Stores email/password hash + OTP fields used by login flow.
+    """
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -32,12 +37,12 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255))
     full_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
-    # ✅ account flags
+    # account flags
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
-    is_verified: Mapped[bool] = mapped_column(Boolean, default=False)  # ✅ needed by auth.py
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    # ✅ OTP fields (fix: otp_hash name must match auth.py)
+    # OTP fields
     otp_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     otp_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     otp_requested_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -48,10 +53,6 @@ class User(Base):
 
 # -----------------------------
 # Association table (many-to-many)
-#
-# IMPORTANT:
-# The database table `complaint_officers` does NOT have an `id` column.
-# It uses a composite primary key (complaint_id, officer_id).
 # -----------------------------
 complaint_officers = Table(
     "complaint_officers",
@@ -67,24 +68,48 @@ complaint_officers = Table(
 # Complaint
 # -----------------------------
 class Complaint(Base):
+    """
+    Complaint record stored in the database.
+
+    IMPORTANT:
+    - Public/mobile intake should send:
+        complainant_first_name, complainant_last_name, complainant_phone,
+        department, stop_date, stop_time (optional), harm_done (optional)
+
+    - Staff web app may send additional fields:
+        stop_location, unit, narrative, types, officer_ids, etc.
+    """
     __tablename__ = "complaints"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     case_number: Mapped[str] = mapped_column(String(32), unique=True, index=True)
 
+    # where it came from (web/mobile)
     source: Mapped[str] = mapped_column(String(32), default="web")
 
     complainant_first_name: Mapped[str] = mapped_column(String(128))
     complainant_last_name: Mapped[str] = mapped_column(String(128))
+
     complainant_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    # ✅ CANONICAL PHONE FIELD (this is what should populate DB + website)
     complainant_phone: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
 
     stop_date: Mapped[date] = mapped_column(Date)
+
+    # ✅ NEW: time of stop (optional)
+    stop_time: Mapped[Optional[time]] = mapped_column(Time, nullable=True)
+
     department: Mapped[str] = mapped_column(String(128))
     unit: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     stop_location: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
-    narrative: Mapped[str] = mapped_column(Text)
+    # ✅ NEW: harm done selection (store list as JSON string, or comma-separated)
+    harm_done: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # ✅ narrative is now optional (mobile is removing it)
+    narrative: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     status: Mapped[str] = mapped_column(String(64), default="open")
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -145,7 +170,7 @@ class Officer(Base):
 
 
 # -----------------------------
-# Case Notes (polymorphic by entity_type + entity_id)
+# Case Notes
 # -----------------------------
 class CaseNote(Base):
     __tablename__ = "case_notes"
@@ -162,6 +187,4 @@ class CaseNote(Base):
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    # ✅ DO NOT define updated_at because the DB table does not have it
-
-# rebuild
+    # DO NOT define updated_at because the DB table does not have it

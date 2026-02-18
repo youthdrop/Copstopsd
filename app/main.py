@@ -16,7 +16,7 @@ from app.api.routes import public
 app = FastAPI(title="Police Accountability API", version="0.1.0")
 
 # Bump this any time you redeploy so we can verify the server updated
-APP_BUILD_ID = "PUBLIC_INTAKE_FIX_2026_02_08_3"
+APP_BUILD_ID = "STOP_TIME_HARM_PHONE_FIX_2026_02_17_1"
 
 
 # -------------------------
@@ -58,9 +58,8 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 # -------------------------
 # Routes
 # -------------------------
-# Include routers AFTER app is created
 app.include_router(api_router)
-app.include_router(public.router)  # ✅ enables /public/complaints and /public/intake
+app.include_router(public.router)  # enables /public/complaints and /public/intake
 
 @app.get("/health")
 def health():
