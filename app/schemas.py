@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import List, Optional
 
 from pydantic import BaseModel, EmailStr, Field
@@ -27,74 +27,71 @@ class OfficerOut(OfficerCreate):
 
 
 # ---------------------------------
+# Complaints (STAFF WEB)
+# ---------------------------------
+c# ---------------------------------
 # Complaints
 # ---------------------------------
 class ComplaintCreate(BaseModel):
     complainant_first_name: str
     complainant_last_name: str
     complainant_email: Optional[EmailStr] = None
-
-    # ✅ ADD THIS (matches DB column complainant_phone)
     complainant_phone: Optional[str] = None
 
     stop_date: date
+    stop_time: Optional[str] = None  # ✅ NEW: "HH:MM"
+
     department: str
     unit: Optional[str] = None
     stop_location: Optional[str] = None
-    narrative: str
 
-    # optional linking to officers (your frontend supports this)
+    narrative: str
     officer_ids: Optional[List[int]] = None
 
 
 class ComplaintOut(BaseModel):
     id: int
     case_number: str
-    source: Optional[str] = None
 
     complainant_first_name: str
     complainant_last_name: str
     complainant_email: Optional[EmailStr] = None
-
-    # ✅ ADD THIS (so API returns it too)
     complainant_phone: Optional[str] = None
 
     stop_date: date
+    stop_time: Optional[str] = None  # ✅ return as string or switch to time later
+
     department: str
     unit: Optional[str] = None
     stop_location: Optional[str] = None
 
-    narrative: str
+    harm_done: Optional[str] = None
+    narrative: Optional[str] = None
     status: Optional[str] = None
 
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-
-    # nested relationships
-    officers: List[OfficerOut] = []
 
     class Config:
         from_attributes = True
 
 
 # ---------------------------------
-# Public intake (mobile/web public form)
+# Public intake (public web form)
 # ---------------------------------
 class ComplaintPublicCreate(BaseModel):
     name: str = Field(..., description="Complainant name (best-effort parsed into first/last)")
     email: Optional[EmailStr] = None
-
-    # ✅ ADD THIS for public intake too (optional)
     complainant_phone: Optional[str] = None
 
     stop_date: date
+    stop_time: Optional[str] = None  # ✅ allow time here too
+
     department: str
     unit: Optional[str] = None
     stop_location: Optional[str] = None
 
     narrative: str
-
-    # Optional officer linking if your public form supports it
     officer_ids: Optional[List[int]] = None
 
 
@@ -102,7 +99,7 @@ class ComplaintPublicCreate(BaseModel):
 # Case Notes
 # ---------------------------------
 class CaseNoteCreate(BaseModel):
-    entity_type: str  # "complaint" or "officer"
+    entity_type: str
     entity_id: int
     note_text: str
     note_type: Optional[str] = None
@@ -118,7 +115,7 @@ class CaseNoteOut(CaseNoteCreate):
 
 
 # ---------------------------------
-# AUTH (for your /auth routes)
+# AUTH
 # ---------------------------------
 class RegisterIn(BaseModel):
     email: EmailStr
@@ -138,7 +135,7 @@ class LoginTwoFactorOut(BaseModel):
 
 class VerifyOtpIn(BaseModel):
     temp_token: str
-    otp_code: str  # "123456"
+    otp_code: str
 
 
 class TokenOut(BaseModel):
