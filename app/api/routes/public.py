@@ -109,7 +109,15 @@ def submit_mobile_intake(payload: ComplaintMobileIntake, db: Session = Depends(g
         complainant_phone=(payload.complainant_phone or "").strip() or None,
         stop_date=payload.stop_date,
         stop_time=parse_hhmm(payload.stop_time),
-        harm_done=normalize_harm_done(payload.harm_done),
+        # Normalize harms from mobile
+        harms = payload.harm_types or []
+
+        complaint = Complaint(
+            ...
+            harm_types=harms,  # ✅ Save array properly
+            harm_done=", ".join(harms) if harms else None,  # optional readable string
+        )
+
         department=(payload.department or "").strip(),
         narrative=None,  # ✅ removed
         status="open",
