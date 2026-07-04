@@ -7,7 +7,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_staff
+from app.api.deps import require_staff, require_admin
 from app.db.models import Complaint, Officer
 from app.db.session import get_db
 from app.schemas import ComplaintCreate, ComplaintOut, ComplaintUpdate
@@ -164,7 +164,7 @@ def update_complaint(complaint_id: int, payload: ComplaintUpdate, db: Session = 
     return complaint
 
 
-@router.delete("/complaints/{complaint_id}", dependencies=[Depends(require_staff)])
+@router.delete("/complaints/{complaint_id}", dependencies=[Depends(require_admin)])
 def delete_complaint(complaint_id: int, db: Session = Depends(get_db)):
     complaint = db.query(Complaint).filter(Complaint.id == complaint_id).first()
     if not complaint:

@@ -13,6 +13,7 @@ from argon2.exceptions import VerifyMismatchError
 
 from app.db.session import get_db
 from app.db.models import User
+from app.api.deps import get_current_user, user_to_dict
 import os
 
 print("DEPLOY_SHA", os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_COMMIT_SHA") or "unknown")
@@ -56,6 +57,15 @@ class VerifyOtpIn(BaseModel):
 class VerifyOtpOut(BaseModel):
     ok: bool
     access_token: str
+
+
+class MeOut(BaseModel):
+    id: int
+    email: EmailStr
+    full_name: Optional[str] = None
+    is_active: bool
+    is_admin: bool
+    is_verified: bool
 
 
 # -------------------------
@@ -134,6 +144,11 @@ def _clear_otp(user: User) -> None:
 # -------------------------
 # Routes
 # -------------------------
+@router.get("/me", response_model=MeOut)
+def me(current_user: User = Depends(get_current_user)):
+    return user_to_dict(current_user)
+
+
 @router.post("/register")
 def register(
     payload: RegisterIn,

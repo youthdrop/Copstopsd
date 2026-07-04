@@ -5,6 +5,7 @@ from app.api.routes import (
     complaints,
     officers,
     case_notes,
+    users,
     public,   # ✅ ADD THIS
 )
 
@@ -14,4 +15,5 @@ router.include_router(auth.router)
 router.include_router(complaints.router)
 router.include_router(officers.router)
 router.include_router(case_notes.router)
+router.include_router(users.router)
 router.include_router(public.router)  # ✅ ADD THIS

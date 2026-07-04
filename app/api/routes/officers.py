@@ -9,7 +9,7 @@ from sqlalchemy import or_
 
 from app.db.session import get_db
 from app.db import models
-from app.api.deps import require_staff
+from app.api.deps import require_staff, require_admin
 
 router = APIRouter(prefix="/officers", tags=["officers"])
 
@@ -124,7 +124,7 @@ def update_officer(officer_id: int, payload: OfficerUpdateIn, db: Session = Depe
     return officer_to_dict(o)
 
 
-@router.delete("/{officer_id}", dependencies=[Depends(require_staff)])
+@router.delete("/{officer_id}", dependencies=[Depends(require_admin)])
 def delete_officer(officer_id: int, db: Session = Depends(get_db)):
     o = db.query(models.Officer).filter(models.Officer.id == officer_id).first()
     if not o:
