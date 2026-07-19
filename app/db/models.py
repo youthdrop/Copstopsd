@@ -215,7 +215,10 @@ class ComplaintDocument(Base):
     original_filename: Mapped[str] = mapped_column(String(512))
     content_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     file_size: Mapped[int] = mapped_column(Integer)
-    file_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    storage_key: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True, unique=True)
+    storage_backend: Mapped[str] = mapped_column(String(32), nullable=False, default="bucket")
+    upload_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    file_data: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

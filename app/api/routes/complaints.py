@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import secrets
+import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -8,6 +10,9 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from pydantic import BaseModel
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
+import boto3
+from botocore.client import Config
+from botocore.exceptions import ClientError
 
 from app.api.deps import require_staff, require_admin
 from app.db.models import Complaint, ComplaintDocument, ComplaintFollowUp, Officer
@@ -303,7 +308,7 @@ def update_follow_up(complaint_id: int, payload: FollowUpUpdate, db: Session = D
     return _followup_to_dict(row)
 
 # -------------------------
-# Complaint documents
+# Complaint documents — Version 3 object storage
 # -------------------------
 DOCUMENT_SECTIONS = {
     "original_complaint",
@@ -311,10 +316,50 @@ DOCUMENT_SECTIONS = {
     "cpp",
     "final_disposition",
 }
-MAX_DOCUMENT_BYTES = 25 * 1024 * 1024
+MAX_DOCUMENT_BYTES = 5 * 1024 * 1024 * 1024
+PRESIGNED_UPLOAD_SECONDS = 15 * 60
+PRESIGNED_DOWNLOAD_SECONDS = 15 * 60
+
+
+class DocumentPresignIn(BaseModel):
+    section: str
+    original_filename: str
+    content_type: Optional[str] = None
+    file_size: int
+
+
+def _bucket_setting(*names: str) -> str:
+    for name in names:
+        value = (os.getenv(name) or "").strip()
+        if value:
+            return value
+    raise RuntimeError(f"Missing object-storage variable: {' or '.join(names)}")
+
+
+def _s3_settings() -> dict:
+    return {
+        "bucket": _bucket_setting("AWS_S3_BUCKET_NAME", "BUCKET"),
+        "access_key": _bucket_setting("AWS_ACCESS_KEY_ID", "ACCESS_KEY_ID"),
+        "secret_key": _bucket_setting("AWS_SECRET_ACCESS_KEY", "SECRET_ACCESS_KEY"),
+        "region": _bucket_setting("AWS_DEFAULT_REGION", "REGION"),
+        "endpoint": _bucket_setting("AWS_ENDPOINT_URL", "ENDPOINT"),
+    }
+
+
+def _s3_client():
+    values = _s3_settings()
+    return boto3.client(
+        "s3",
+        endpoint_url=values["endpoint"],
+        aws_access_key_id=values["access_key"],
+        aws_secret_access_key=values["secret_key"],
+        region_name=values["region"],
+        config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
+    )
 
 
 def _document_to_dict(row: ComplaintDocument) -> dict:
+    backend = row.storage_backend or ("database" if row.file_data else "bucket")
     return {
         "id": row.id,
         "complaint_id": row.complaint_id,
@@ -322,6 +367,9 @@ def _document_to_dict(row: ComplaintDocument) -> dict:
         "original_filename": row.original_filename,
         "content_type": row.content_type,
         "file_size": row.file_size,
+        "storage_key": row.storage_key,
+        "storage_backend": backend,
+        "upload_status": row.upload_status or ("uploaded" if row.file_data else "pending"),
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
 
@@ -333,6 +381,12 @@ def _validate_document_section(section: str) -> str:
     return value
 
 
+def _safe_storage_filename(filename: str) -> str:
+    cleaned = (filename or "document").replace("\\", "_").replace("/", "_")
+    cleaned = cleaned.replace("\r", "").replace("\n", "").strip()
+    return (cleaned or "document")[:240]
+
+
 @router.get("/complaints/{complaint_id}/documents", dependencies=[Depends(require_staff)])
 def list_complaint_documents(
     complaint_id: int,
@@ -340,7 +394,6 @@ def list_complaint_documents(
     db: Session = Depends(get_db),
 ):
     _get_complaint_or_404(db, complaint_id)
-
     query = db.query(ComplaintDocument).filter(
         ComplaintDocument.complaint_id == complaint_id
     )
@@ -348,59 +401,130 @@ def list_complaint_documents(
         query = query.filter(
             ComplaintDocument.section == _validate_document_section(section)
         )
-
     rows = query.order_by(ComplaintDocument.created_at.desc()).all()
     return [_document_to_dict(row) for row in rows]
 
 
-@router.post("/complaints/{complaint_id}/documents", dependencies=[Depends(require_staff)])
-async def upload_complaint_document(
+@router.post("/complaints/{complaint_id}/documents/presign", dependencies=[Depends(require_staff)])
+def create_document_upload_ticket(
     complaint_id: int,
-    section: str = Form(...),
-    file: UploadFile = File(...),
+    payload: DocumentPresignIn,
     db: Session = Depends(get_db),
 ):
     _get_complaint_or_404(db, complaint_id)
-    section_value = _validate_document_section(section)
+    section = _validate_document_section(payload.section)
+    if payload.file_size <= 0:
+        raise HTTPException(status_code=400, detail="File size must be greater than zero")
+    if payload.file_size > MAX_DOCUMENT_BYTES:
+        raise HTTPException(status_code=413, detail="File exceeds the 5 GB limit")
 
-    filename = (file.filename or "document").strip()
-    if not filename:
-        filename = "document"
-
-    data = await file.read(MAX_DOCUMENT_BYTES + 1)
-    await file.close()
-
-    if not data:
-        raise HTTPException(status_code=400, detail="The uploaded file is empty")
-    if len(data) > MAX_DOCUMENT_BYTES:
-        raise HTTPException(status_code=413, detail="File exceeds the 25 MB limit")
+    filename = _safe_storage_filename(payload.original_filename)
+    content_type = (payload.content_type or "application/octet-stream").strip()
+    object_key = (
+        f"complaints/{complaint_id}/{section}/"
+        f"{uuid.uuid4().hex}-{filename}"
+    )
 
     row = ComplaintDocument(
         complaint_id=complaint_id,
-        section=section_value,
-        original_filename=filename[:512],
-        content_type=(file.content_type or None),
-        file_size=len(data),
-        file_data=data,
+        section=section,
+        original_filename=filename,
+        content_type=content_type,
+        file_size=payload.file_size,
+        storage_key=object_key,
+        storage_backend="bucket",
+        upload_status="pending",
+        file_data=None,
     )
     db.add(row)
+    db.commit()
+    db.refresh(row)
+
+    values = _s3_settings()
+    upload_url = _s3_client().generate_presigned_url(
+        "put_object",
+        Params={
+            "Bucket": values["bucket"],
+            "Key": object_key,
+            "ContentType": content_type,
+        },
+        ExpiresIn=PRESIGNED_UPLOAD_SECONDS,
+        HttpMethod="PUT",
+    )
+    return {
+        "document": _document_to_dict(row),
+        "upload_url": upload_url,
+        "upload_headers": {"Content-Type": content_type},
+    }
+
+
+@router.post("/complaint-documents/{document_id}/complete", dependencies=[Depends(require_staff)])
+def complete_document_upload(document_id: int, db: Session = Depends(get_db)):
+    row = db.query(ComplaintDocument).filter(
+        ComplaintDocument.id == document_id
+    ).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if not row.storage_key:
+        raise HTTPException(status_code=400, detail="Document has no object-storage key")
+
+    values = _s3_settings()
+    try:
+        result = _s3_client().head_object(
+            Bucket=values["bucket"], Key=row.storage_key
+        )
+    except ClientError as exc:
+        raise HTTPException(status_code=409, detail="Object upload is not complete") from exc
+
+    actual_size = int(result.get("ContentLength") or 0)
+    if actual_size <= 0:
+        raise HTTPException(status_code=409, detail="Uploaded object is empty")
+
+    row.file_size = actual_size
+    row.upload_status = "uploaded"
     db.commit()
     db.refresh(row)
     return _document_to_dict(row)
 
 
-@router.get("/complaint-documents/{document_id}/download", dependencies=[Depends(require_staff)])
-def download_complaint_document(
-    document_id: int,
-    db: Session = Depends(get_db),
-):
+@router.get("/complaint-documents/{document_id}/download-url", dependencies=[Depends(require_staff)])
+def create_document_download_ticket(document_id: int, db: Session = Depends(get_db)):
     row = db.query(ComplaintDocument).filter(
         ComplaintDocument.id == document_id
     ).first()
     if not row:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    safe_name = row.original_filename.replace('"', "").replace("\r", "").replace("\n", "")
+    if row.file_data and not row.storage_key:
+        return {"download_url": f"/complaint-documents/{document_id}/legacy-download"}
+    if not row.storage_key or row.upload_status != "uploaded":
+        raise HTTPException(status_code=409, detail="Document upload is not complete")
+
+    values = _s3_settings()
+    safe_name = _safe_storage_filename(row.original_filename)
+    url = _s3_client().generate_presigned_url(
+        "get_object",
+        Params={
+            "Bucket": values["bucket"],
+            "Key": row.storage_key,
+            "ResponseContentDisposition": f'attachment; filename="{safe_name}"',
+            "ResponseContentType": row.content_type or "application/octet-stream",
+        },
+        ExpiresIn=PRESIGNED_DOWNLOAD_SECONDS,
+        HttpMethod="GET",
+    )
+    return {"download_url": url}
+
+
+@router.get("/complaint-documents/{document_id}/legacy-download", dependencies=[Depends(require_staff)])
+def download_legacy_document(document_id: int, db: Session = Depends(get_db)):
+    row = db.query(ComplaintDocument).filter(
+        ComplaintDocument.id == document_id
+    ).first()
+    if not row or not row.file_data:
+        raise HTTPException(status_code=404, detail="Legacy document not found")
+
+    safe_name = _safe_storage_filename(row.original_filename)
     return Response(
         content=row.file_data,
         media_type=row.content_type or "application/octet-stream",
@@ -409,17 +533,25 @@ def download_complaint_document(
 
 
 @router.delete("/complaint-documents/{document_id}", dependencies=[Depends(require_staff)])
-def delete_complaint_document(
-    document_id: int,
-    db: Session = Depends(get_db),
-):
+def delete_complaint_document(document_id: int, db: Session = Depends(get_db)):
     row = db.query(ComplaintDocument).filter(
         ComplaintDocument.id == document_id
     ).first()
     if not row:
         raise HTTPException(status_code=404, detail="Document not found")
 
+    if row.storage_key:
+        values = _s3_settings()
+        try:
+            _s3_client().delete_object(
+                Bucket=values["bucket"], Key=row.storage_key
+            )
+        except ClientError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail="Could not delete object from storage",
+            ) from exc
+
     db.delete(row)
     db.commit()
     return {"ok": True, "deleted_id": document_id}
-
