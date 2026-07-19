@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import secrets
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -186,6 +186,29 @@ def delete_complaint(complaint_id: int, db: Session = Depends(get_db)):
 ALLOWED_FINDINGS = {"Miscellaneous", "Sustained", "Not Sustained", "Exonerated", "Unfounded"}
 
 
+def _normalize_disposition_findings(values: Optional[List[Any]]) -> List[Dict[str, str]]:
+    if not values:
+        return [{"finding": "Miscellaneous", "description": ""}]
+
+    normalized: List[Dict[str, str]] = []
+    for value in values:
+        if isinstance(value, str):
+            finding = value.strip() or "Miscellaneous"
+            description = ""
+        elif isinstance(value, dict):
+            finding = str(value.get("finding") or "Miscellaneous").strip()
+            description = str(value.get("description") or "").strip()
+        else:
+            raise HTTPException(status_code=400, detail="Invalid disposition finding format")
+
+        if finding not in ALLOWED_FINDINGS:
+            raise HTTPException(status_code=400, detail=f"Invalid disposition finding: {finding}")
+
+        normalized.append({"finding": finding, "description": description})
+
+    return normalized
+
+
 class FollowUpUpdate(BaseModel):
     original_submitted_date: Optional[str] = None
     original_submitted_to: Optional[List[str]] = None
@@ -197,7 +220,7 @@ class FollowUpUpdate(BaseModel):
     cpp_status: Optional[str] = None
     cpp_case_note: Optional[str] = None
     disposition_date: Optional[str] = None
-    disposition_findings: Optional[List[str]] = None
+    disposition_findings: Optional[List[Any]] = None
     disposition_case_note: Optional[str] = None
 
 
@@ -224,7 +247,7 @@ def _followup_to_dict(row: ComplaintFollowUp) -> dict:
         "cpp_status": row.cpp_status,
         "cpp_case_note": row.cpp_case_note,
         "disposition_date": row.disposition_date.isoformat() if row.disposition_date else None,
-        "disposition_findings": row.disposition_findings or ["Miscellaneous"],
+        "disposition_findings": _normalize_disposition_findings(row.disposition_findings),
         "disposition_case_note": row.disposition_case_note,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
@@ -243,7 +266,7 @@ def get_follow_up(complaint_id: int, db: Session = Depends(get_db)):
     _get_complaint_or_404(db, complaint_id)
     row = db.query(ComplaintFollowUp).filter(ComplaintFollowUp.complaint_id == complaint_id).first()
     if not row:
-        row = ComplaintFollowUp(complaint_id=complaint_id, disposition_findings=["Miscellaneous"])
+        row = ComplaintFollowUp(complaint_id=complaint_id, disposition_findings=[{"finding": "Miscellaneous", "description": ""}])
         db.add(row)
         db.commit()
         db.refresh(row)
@@ -255,7 +278,7 @@ def update_follow_up(complaint_id: int, payload: FollowUpUpdate, db: Session = D
     _get_complaint_or_404(db, complaint_id)
     row = db.query(ComplaintFollowUp).filter(ComplaintFollowUp.complaint_id == complaint_id).first()
     if not row:
-        row = ComplaintFollowUp(complaint_id=complaint_id, disposition_findings=["Miscellaneous"])
+        row = ComplaintFollowUp(complaint_id=complaint_id, disposition_findings=[{"finding": "Miscellaneous", "description": ""}])
         db.add(row)
 
     data = payload.model_dump(exclude_unset=True)
@@ -265,11 +288,9 @@ def update_follow_up(complaint_id: int, payload: FollowUpUpdate, db: Session = D
     if "disposition_date" in data:
         row.disposition_date = _date_or_none(data.pop("disposition_date"))
     if "disposition_findings" in data:
-        findings = data.pop("disposition_findings") or ["Miscellaneous"]
-        invalid = [value for value in findings if value not in ALLOWED_FINDINGS]
-        if invalid:
-            raise HTTPException(status_code=400, detail=f"Invalid disposition finding: {invalid[0]}")
-        row.disposition_findings = findings
+        row.disposition_findings = _normalize_disposition_findings(
+            data.pop("disposition_findings")
+        )
 
     for key, value in data.items():
         if isinstance(value, str):

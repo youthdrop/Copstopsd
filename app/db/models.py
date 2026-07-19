@@ -188,8 +188,10 @@ class ComplaintFollowUp(Base):
     cpp_case_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     disposition_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    disposition_findings: Mapped[list[str]] = mapped_column(
-        JSON, nullable=False, default=lambda: ["Miscellaneous"]
+    disposition_findings: Mapped[list[dict[str, str]]] = mapped_column(
+        JSON,
+        nullable=False,
+        default=lambda: [{"finding": "Miscellaneous", "description": ""}],
     )
     disposition_case_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
