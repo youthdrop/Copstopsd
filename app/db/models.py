@@ -191,7 +191,6 @@ class ComplaintFollowUp(Base):
     disposition_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     disposition_findings: Mapped[list[dict[str, str]]] = mapped_column(
         JSON,
-    LargeBinary,
         nullable=False,
         default=lambda: [{"finding": "Miscellaneous", "description": ""}],
     )
