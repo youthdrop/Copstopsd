@@ -5,10 +5,11 @@ from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_staff, require_admin
-from app.db.models import Complaint, Officer
+from app.db.models import Complaint, ComplaintFollowUp, Officer
 from app.db.session import get_db
 from app.schemas import ComplaintCreate, ComplaintOut, ComplaintUpdate
 
@@ -178,3 +179,104 @@ def delete_complaint(complaint_id: int, db: Session = Depends(get_db)):
     db.delete(complaint)
     db.commit()
     return {"ok": True, "deleted_id": complaint_id}
+
+# -------------------------
+# Complaint follow-up
+# -------------------------
+ALLOWED_FINDINGS = {"Miscellaneous", "Sustained", "Not Sustained", "Exonerated", "Unfounded"}
+
+
+class FollowUpUpdate(BaseModel):
+    original_submitted_date: Optional[str] = None
+    original_submitted_to: Optional[List[str]] = None
+    original_case_note: Optional[str] = None
+    ia_case_number: Optional[str] = None
+    ia_status: Optional[str] = None
+    ia_case_note: Optional[str] = None
+    cpp_case_number: Optional[str] = None
+    cpp_status: Optional[str] = None
+    cpp_case_note: Optional[str] = None
+    disposition_date: Optional[str] = None
+    disposition_findings: Optional[List[str]] = None
+    disposition_case_note: Optional[str] = None
+
+
+def _date_or_none(value: Optional[str]):
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid date: {value}")
+
+
+def _followup_to_dict(row: ComplaintFollowUp) -> dict:
+    return {
+        "id": row.id,
+        "complaint_id": row.complaint_id,
+        "original_submitted_date": row.original_submitted_date.isoformat() if row.original_submitted_date else None,
+        "original_submitted_to": row.original_submitted_to or [],
+        "original_case_note": row.original_case_note,
+        "ia_case_number": row.ia_case_number,
+        "ia_status": row.ia_status,
+        "ia_case_note": row.ia_case_note,
+        "cpp_case_number": row.cpp_case_number,
+        "cpp_status": row.cpp_status,
+        "cpp_case_note": row.cpp_case_note,
+        "disposition_date": row.disposition_date.isoformat() if row.disposition_date else None,
+        "disposition_findings": row.disposition_findings or ["Miscellaneous"],
+        "disposition_case_note": row.disposition_case_note,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _get_complaint_or_404(db: Session, complaint_id: int):
+    complaint = db.query(Complaint).filter(Complaint.id == complaint_id).first()
+    if not complaint:
+        raise HTTPException(status_code=404, detail="Complaint not found")
+    return complaint
+
+
+@router.get("/complaints/{complaint_id}/follow-up", dependencies=[Depends(require_staff)])
+def get_follow_up(complaint_id: int, db: Session = Depends(get_db)):
+    _get_complaint_or_404(db, complaint_id)
+    row = db.query(ComplaintFollowUp).filter(ComplaintFollowUp.complaint_id == complaint_id).first()
+    if not row:
+        row = ComplaintFollowUp(complaint_id=complaint_id, disposition_findings=["Miscellaneous"])
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+    return _followup_to_dict(row)
+
+
+@router.patch("/complaints/{complaint_id}/follow-up", dependencies=[Depends(require_staff)])
+def update_follow_up(complaint_id: int, payload: FollowUpUpdate, db: Session = Depends(get_db)):
+    _get_complaint_or_404(db, complaint_id)
+    row = db.query(ComplaintFollowUp).filter(ComplaintFollowUp.complaint_id == complaint_id).first()
+    if not row:
+        row = ComplaintFollowUp(complaint_id=complaint_id, disposition_findings=["Miscellaneous"])
+        db.add(row)
+
+    data = payload.model_dump(exclude_unset=True)
+
+    if "original_submitted_date" in data:
+        row.original_submitted_date = _date_or_none(data.pop("original_submitted_date"))
+    if "disposition_date" in data:
+        row.disposition_date = _date_or_none(data.pop("disposition_date"))
+    if "disposition_findings" in data:
+        findings = data.pop("disposition_findings") or ["Miscellaneous"]
+        invalid = [value for value in findings if value not in ALLOWED_FINDINGS]
+        if invalid:
+            raise HTTPException(status_code=400, detail=f"Invalid disposition finding: {invalid[0]}")
+        row.disposition_findings = findings
+
+    for key, value in data.items():
+        if isinstance(value, str):
+            value = value.strip() or None
+        setattr(row, key, value)
+
+    db.commit()
+    db.refresh(row)
+    return _followup_to_dict(row)
+

@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    JSON,
     String,
     Table,
     Text,
@@ -162,3 +163,38 @@ class CaseNote(Base):
 
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+# -----------------------------
+# Complaint follow-up tracking
+# -----------------------------
+class ComplaintFollowUp(Base):
+    __tablename__ = "complaint_followups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    complaint_id: Mapped[int] = mapped_column(
+        ForeignKey("complaints.id", ondelete="CASCADE"), unique=True, index=True
+    )
+
+    original_submitted_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    original_submitted_to: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    original_case_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    ia_case_number: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    ia_status: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    ia_case_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    cpp_case_number: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    cpp_status: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    cpp_case_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    disposition_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    disposition_findings: Mapped[list[str]] = mapped_column(
+        JSON, nullable=False, default=lambda: ["Miscellaneous"]
+    )
+    disposition_case_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
