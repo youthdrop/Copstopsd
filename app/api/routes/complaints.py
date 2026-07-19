@@ -4,12 +4,13 @@ import secrets
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_staff, require_admin
-from app.db.models import Complaint, ComplaintFollowUp, Officer
+from app.db.models import Complaint, ComplaintDocument, ComplaintFollowUp, Officer
 from app.db.session import get_db
 from app.schemas import ComplaintCreate, ComplaintOut, ComplaintUpdate
 
@@ -300,4 +301,125 @@ def update_follow_up(complaint_id: int, payload: FollowUpUpdate, db: Session = D
     db.commit()
     db.refresh(row)
     return _followup_to_dict(row)
+
+# -------------------------
+# Complaint documents
+# -------------------------
+DOCUMENT_SECTIONS = {
+    "original_complaint",
+    "internal_affairs",
+    "cpp",
+    "final_disposition",
+}
+MAX_DOCUMENT_BYTES = 25 * 1024 * 1024
+
+
+def _document_to_dict(row: ComplaintDocument) -> dict:
+    return {
+        "id": row.id,
+        "complaint_id": row.complaint_id,
+        "section": row.section,
+        "original_filename": row.original_filename,
+        "content_type": row.content_type,
+        "file_size": row.file_size,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+def _validate_document_section(section: str) -> str:
+    value = (section or "").strip()
+    if value not in DOCUMENT_SECTIONS:
+        raise HTTPException(status_code=400, detail="Invalid document section")
+    return value
+
+
+@router.get("/complaints/{complaint_id}/documents", dependencies=[Depends(require_staff)])
+def list_complaint_documents(
+    complaint_id: int,
+    section: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    _get_complaint_or_404(db, complaint_id)
+
+    query = db.query(ComplaintDocument).filter(
+        ComplaintDocument.complaint_id == complaint_id
+    )
+    if section:
+        query = query.filter(
+            ComplaintDocument.section == _validate_document_section(section)
+        )
+
+    rows = query.order_by(ComplaintDocument.created_at.desc()).all()
+    return [_document_to_dict(row) for row in rows]
+
+
+@router.post("/complaints/{complaint_id}/documents", dependencies=[Depends(require_staff)])
+async def upload_complaint_document(
+    complaint_id: int,
+    section: str = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    _get_complaint_or_404(db, complaint_id)
+    section_value = _validate_document_section(section)
+
+    filename = (file.filename or "document").strip()
+    if not filename:
+        filename = "document"
+
+    data = await file.read(MAX_DOCUMENT_BYTES + 1)
+    await file.close()
+
+    if not data:
+        raise HTTPException(status_code=400, detail="The uploaded file is empty")
+    if len(data) > MAX_DOCUMENT_BYTES:
+        raise HTTPException(status_code=413, detail="File exceeds the 25 MB limit")
+
+    row = ComplaintDocument(
+        complaint_id=complaint_id,
+        section=section_value,
+        original_filename=filename[:512],
+        content_type=(file.content_type or None),
+        file_size=len(data),
+        file_data=data,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _document_to_dict(row)
+
+
+@router.get("/complaint-documents/{document_id}/download", dependencies=[Depends(require_staff)])
+def download_complaint_document(
+    document_id: int,
+    db: Session = Depends(get_db),
+):
+    row = db.query(ComplaintDocument).filter(
+        ComplaintDocument.id == document_id
+    ).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    safe_name = row.original_filename.replace('"', "").replace("\r", "").replace("\n", "")
+    return Response(
+        content=row.file_data,
+        media_type=row.content_type or "application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
+    )
+
+
+@router.delete("/complaint-documents/{document_id}", dependencies=[Depends(require_staff)])
+def delete_complaint_document(
+    document_id: int,
+    db: Session = Depends(get_db),
+):
+    row = db.query(ComplaintDocument).filter(
+        ComplaintDocument.id == document_id
+    ).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    db.delete(row)
+    db.commit()
+    return {"ok": True, "deleted_id": document_id}
 

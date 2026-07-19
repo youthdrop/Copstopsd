@@ -11,6 +11,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     JSON,
+    LargeBinary,
     String,
     Table,
     Text,
@@ -190,6 +191,7 @@ class ComplaintFollowUp(Base):
     disposition_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     disposition_findings: Mapped[list[dict[str, str]]] = mapped_column(
         JSON,
+    LargeBinary,
         nullable=False,
         default=lambda: [{"finding": "Miscellaneous", "description": ""}],
     )
@@ -198,5 +200,24 @@ class ComplaintFollowUp(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+# -----------------------------
+# Complaint documents
+# -----------------------------
+class ComplaintDocument(Base):
+    __tablename__ = "complaint_documents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    complaint_id: Mapped[int] = mapped_column(
+        ForeignKey("complaints.id", ondelete="CASCADE"), index=True
+    )
+    section: Mapped[str] = mapped_column(String(64), index=True)
+    original_filename: Mapped[str] = mapped_column(String(512))
+    content_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    file_size: Mapped[int] = mapped_column(Integer)
+    file_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
     )
 
