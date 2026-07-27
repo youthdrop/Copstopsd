@@ -3,23 +3,37 @@ from __future__ import annotations
 import os
 import secrets
 import uuid
-from datetime import datetime
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from fastapi.responses import Response
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 import boto3
 from botocore.client import Config
 from botocore.exceptions import ClientError
 
-from app.api.deps import require_staff, require_admin
-from app.db.models import Complaint, ComplaintDocument, ComplaintFollowUp, Officer
+from app.api.deps import get_current_user, require_staff, require_admin, user_to_dict
+from app.db.models import Complaint, ComplaintDocument, ComplaintFollowUp, Officer, User
 from app.db.session import get_db
 from app.schemas import ComplaintCreate, ComplaintOut, ComplaintUpdate
 
 router = APIRouter()
+
+PIPELINE_STAGES = {
+    "new",
+    "assigned",
+    "contact_made",
+    "awaiting_documents",
+    "complaint_drafted",
+    "complaint_submitted",
+    "awaiting_agency_response",
+    "follow_up_required",
+    "resolved",
+    "closed",
+}
 
 
 def generate_case_number() -> str:
@@ -110,9 +124,92 @@ def create_complaint(payload: ComplaintCreate, db: Session = Depends(get_db)):
     return complaint
 
 
-@router.get("/complaints", response_model=List[ComplaintOut], dependencies=[Depends(require_staff)])
-def list_complaints(db: Session = Depends(get_db)):
-    return db.query(Complaint).order_by(Complaint.created_at.desc()).all()
+@router.get("/complaints", response_model=List[ComplaintOut])
+def list_complaints(
+    view: str = Query(default="all"),
+    assigned_to_id: Optional[int] = Query(default=None),
+    priority: Optional[str] = Query(default=None),
+    pipeline_stage: Optional[str] = Query(default=None),
+    q: str = Query(default=""),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_staff),
+):
+    query = db.query(Complaint)
+    today = date.today()
+
+    if view == "mine":
+        query = query.filter(Complaint.assigned_to_id == current_user.id)
+    elif view == "unassigned":
+        query = query.filter(Complaint.assigned_to_id.is_(None))
+    elif view == "due_this_week":
+        query = query.filter(Complaint.due_date.between(today, today + timedelta(days=7)))
+    elif view == "overdue":
+        query = query.filter(Complaint.due_date < today, Complaint.status != "closed")
+    elif view == "closed":
+        query = query.filter(or_(Complaint.status == "closed", Complaint.pipeline_stage == "closed"))
+
+    if assigned_to_id is not None:
+        query = query.filter(Complaint.assigned_to_id == assigned_to_id)
+    if priority:
+        query = query.filter(Complaint.priority == priority.lower())
+    if pipeline_stage:
+        query = query.filter(Complaint.pipeline_stage == pipeline_stage.lower())
+    search = q.strip()
+    if search:
+        like = f"%{search}%"
+        query = query.filter(or_(
+            Complaint.case_number.ilike(like),
+            Complaint.complainant_first_name.ilike(like),
+            Complaint.complainant_last_name.ilike(like),
+            Complaint.department.ilike(like),
+        ))
+    return query.order_by(Complaint.created_at.desc()).all()
+
+
+@router.get("/complaints/staff-options", dependencies=[Depends(require_staff)])
+def complaint_staff_options(db: Session = Depends(get_db)):
+    users = db.query(User).filter(User.is_active.is_(True)).order_by(User.full_name.asc(), User.email.asc()).all()
+    return [user_to_dict(user) for user in users]
+
+
+@router.get("/complaints/dashboard/summary", dependencies=[Depends(require_staff)])
+def complaint_dashboard_summary(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    today = date.today()
+    week_end = today + timedelta(days=7)
+    open_filter = Complaint.status != "closed"
+    summary = {
+        "open": db.query(Complaint).filter(open_filter).count(),
+        "mine": db.query(Complaint).filter(open_filter, Complaint.assigned_to_id == current_user.id).count(),
+        "unassigned": db.query(Complaint).filter(open_filter, Complaint.assigned_to_id.is_(None)).count(),
+        "high_priority": db.query(Complaint).filter(open_filter, Complaint.priority.in_(["high", "critical"])).count(),
+        "due_this_week": db.query(Complaint).filter(open_filter, Complaint.due_date.between(today, week_end)).count(),
+        "overdue": db.query(Complaint).filter(open_filter, Complaint.due_date < today).count(),
+        "closed": db.query(Complaint).filter(
+            or_(Complaint.status == "closed", Complaint.pipeline_stage == "closed")
+        ).count(),
+        "pipeline": {
+            stage: db.query(Complaint).filter(Complaint.pipeline_stage == stage).count()
+            for stage in sorted(PIPELINE_STAGES)
+        },
+        "workload": [],
+    }
+    if current_user.is_admin:
+        rows = (
+            db.query(User.id, User.full_name, User.email, func.count(Complaint.id))
+            .outerjoin(Complaint, (Complaint.assigned_to_id == User.id) & open_filter)
+            .filter(User.is_active.is_(True))
+            .group_by(User.id, User.full_name, User.email)
+            .order_by(func.count(Complaint.id).desc(), User.full_name.asc())
+            .all()
+        )
+        summary["workload"] = [
+            {"user_id": row[0], "name": row[1] or row[2], "email": row[2], "open_complaints": row[3]}
+            for row in rows
+        ]
+    return summary
 
 
 @router.get("/complaints/{complaint_id}", response_model=ComplaintOut, dependencies=[Depends(require_staff)])
@@ -124,7 +221,12 @@ def get_complaint(complaint_id: int, db: Session = Depends(get_db)):
 
 
 @router.patch("/complaints/{complaint_id}", response_model=ComplaintOut, dependencies=[Depends(require_staff)])
-def update_complaint(complaint_id: int, payload: ComplaintUpdate, db: Session = Depends(get_db)):
+def update_complaint(
+    complaint_id: int,
+    payload: ComplaintUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_staff),
+):
     complaint = db.query(Complaint).filter(Complaint.id == complaint_id).first()
     if not complaint:
         raise HTTPException(status_code=404, detail="Complaint not found")
@@ -152,6 +254,38 @@ def update_complaint(complaint_id: int, payload: ComplaintUpdate, db: Session = 
 
     if payload.status is not None:
         complaint.status = payload.status
+
+    if payload.assigned_to_id is not None:
+        assignee = db.query(User).filter(User.id == payload.assigned_to_id, User.is_active.is_(True)).first()
+        if not assignee:
+            raise HTTPException(status_code=400, detail="Assigned staff member was not found or is inactive")
+        if complaint.assigned_to_id != assignee.id:
+            complaint.assigned_to_id = assignee.id
+            complaint.assigned_by_id = current_user.id
+            complaint.assigned_at = datetime.now(timezone.utc)
+    elif "assigned_to_id" in payload.model_fields_set:
+        complaint.assigned_to_id = None
+        complaint.assigned_by_id = current_user.id
+        complaint.assigned_at = datetime.now(timezone.utc)
+
+    if payload.priority is not None:
+        normalized_priority = payload.priority.lower().strip()
+        if normalized_priority not in {"low", "medium", "high", "critical"}:
+            raise HTTPException(status_code=400, detail="Priority must be low, medium, high, or critical")
+        complaint.priority = normalized_priority
+
+    if "due_date" in payload.model_fields_set:
+        complaint.due_date = payload.due_date
+
+    if payload.pipeline_stage is not None:
+        normalized_stage = payload.pipeline_stage.lower().strip()
+        if normalized_stage not in PIPELINE_STAGES:
+            raise HTTPException(status_code=400, detail="Invalid complaint stage")
+        complaint.pipeline_stage = normalized_stage
+        complaint.status = "closed" if normalized_stage == "closed" else "open"
+
+    if "next_action" in payload.model_fields_set:
+        complaint.next_action = (payload.next_action or "").strip() or None
 
     if payload.narrative is not None:
         complaint.narrative = payload.narrative
