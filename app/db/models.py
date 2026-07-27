@@ -47,6 +47,8 @@ class User(Base):
     otp_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     otp_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     otp_requested_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    reset_otp_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    reset_otp_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -98,6 +100,23 @@ class Complaint(Base):
     narrative: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(64), default="open")
 
+    # Internal complaint-management fields. Public/mobile intake does not send these.
+    assigned_to_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    assigned_by_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    assigned_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    priority: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="medium", server_default="medium"
+    )
+    due_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
+    pipeline_stage: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="new", server_default="new", index=True
+    )
+    next_action: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -113,6 +132,13 @@ class Complaint(Base):
         primaryjoin="and_(CaseNote.entity_type=='complaint', foreign(CaseNote.entity_id)==Complaint.id)",
         viewonly=True,
         lazy="selectin",
+    )
+
+    assigned_to: Mapped[Optional["User"]] = relationship(
+        "User", foreign_keys=[assigned_to_id], lazy="joined"
+    )
+    assigned_by: Mapped[Optional["User"]] = relationship(
+        "User", foreign_keys=[assigned_by_id], lazy="joined"
     )
 
 

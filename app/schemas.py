@@ -76,6 +76,21 @@ class ComplaintUpdate(BaseModel):
 
     officer_ids: Optional[List[int]] = None
 
+    assigned_to_id: Optional[int] = None
+    priority: Optional[str] = None
+    due_date: Optional[date] = None
+    pipeline_stage: Optional[str] = None
+    next_action: Optional[str] = None
+
+
+class StaffSummary(BaseModel):
+    id: int
+    email: EmailStr
+    full_name: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
 
 class ComplaintOut(BaseModel):
     id: int
@@ -107,6 +122,16 @@ class ComplaintOut(BaseModel):
 
     narrative: Optional[str] = None
     status: Optional[str] = None
+
+    assigned_to_id: Optional[int] = None
+    assigned_by_id: Optional[int] = None
+    assigned_at: Optional[datetime] = None
+    priority: str = "medium"
+    due_date: Optional[date] = None
+    pipeline_stage: str = "new"
+    next_action: Optional[str] = None
+    assigned_to: Optional[StaffSummary] = None
+    assigned_by: Optional[StaffSummary] = None
 
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
