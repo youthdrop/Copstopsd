@@ -5,18 +5,26 @@ import resend
 # ---------------------------
 # Resend email config
 # ---------------------------
+
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 
-# Set in Railway as:
-# FROM_EMAIL=CopStopSD <noreply@copstopsd.org>
 FROM_EMAIL = os.getenv(
     "FROM_EMAIL",
     "CopStopSD <noreply@copstopsd.org>"
 )
 
-# Email address that receives new complaint notifications
-STAFF_NOTIFICATION_EMAIL = os.getenv("STAFF_NOTIFICATION_EMAIL")
+# Comma-separated list in Railway, for example:
+# laila@potcsd.org,staff1@potcsd.org,staff2@potcsd.org
+STAFF_NOTIFICATION_EMAILS = [
+    email.strip()
+    for email in os.getenv("STAFF_NOTIFICATION_EMAILS", "").split(",")
+    if email.strip()
+]
 
+
+# ---------------------------
+# Base email sender
+# ---------------------------
 
 def _send_email(subject: str, to_email: str, body: str) -> None:
     if not RESEND_API_KEY:
@@ -39,6 +47,7 @@ def _send_email(subject: str, to_email: str, body: str) -> None:
 # ---------------------------
 # OTP EMAIL (2FA)
 # ---------------------------
+
 def send_otp_email(to_email: str, otp_code: str) -> None:
     subject = "Your CopStopSD verification code"
 
@@ -51,12 +60,17 @@ This code will expire in 10 minutes.
 If you did not request this code, you can ignore this email.
 """
 
-    _send_email(subject, to_email, body)
+    _send_email(
+        subject,
+        to_email,
+        body
+    )
 
 
 # ---------------------------
 # Complaint notification email
 # ---------------------------
+
 def send_new_submission_email(
     case_number: str,
     summary: str,
@@ -77,14 +91,15 @@ View complaint:
 {link}
 """
 
-    if not STAFF_NOTIFICATION_EMAIL:
+    if not STAFF_NOTIFICATION_EMAILS:
         raise RuntimeError(
-            "STAFF_NOTIFICATION_EMAIL must be set in environment variables"
+            "STAFF_NOTIFICATION_EMAILS must be set in environment variables"
         )
 
-    _send_email(
-        subject,
-        STAFF_NOTIFICATION_EMAIL,
-        body
-    )
+    for staff_email in STAFF_NOTIFICATION_EMAILS:
+        _send_email(
+            subject,
+            staff_email,
+            body
+        )
 
