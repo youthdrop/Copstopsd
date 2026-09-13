@@ -19,6 +19,7 @@ from app.api.deps import get_current_user, require_staff, require_admin, user_to
 from app.db.models import Complaint, ComplaintDocument, ComplaintFollowUp, Officer, User
 from app.db.session import get_db
 from app.schemas import ComplaintCreate, ComplaintOut, ComplaintUpdate
+from app.services.email_service import send_new_submission_email
 
 router = APIRouter()
 
@@ -90,10 +91,22 @@ def set_officers_from_ids(db: Session, complaint: Complaint, officer_ids: Option
         complaint.officers.append(o)
 
 
-@router.post("/complaints", response_model=ComplaintOut, dependencies=[Depends(require_staff)])
-def create_complaint(payload: ComplaintCreate, db: Session = Depends(get_db)):
+@router.post(
+    "/complaints",
+    response_model=ComplaintOut,
+    dependencies=[Depends(require_staff)]
+)
+def create_complaint(
+    payload: ComplaintCreate,
+    db: Session = Depends(get_db)
+):
     stop_time_obj = parse_hhmm(payload.stop_time)
-    harms = normalize_harm_types(payload.harm_types, payload.types, payload.harm_done)
+
+    harms = normalize_harm_types(
+        payload.harm_types,
+        payload.types,
+        payload.harm_done
+    )
 
     complaint = Complaint(
         case_number=generate_case_number(),
@@ -101,7 +114,11 @@ def create_complaint(payload: ComplaintCreate, db: Session = Depends(get_db)):
         status="open",
         complainant_first_name=payload.complainant_first_name,
         complainant_last_name=payload.complainant_last_name,
-        complainant_email=str(payload.complainant_email) if payload.complainant_email else None,
+        complainant_email=(
+            str(payload.complainant_email)
+            if payload.complainant_email
+            else None
+        ),
         complainant_phone=payload.complainant_phone,
         stop_date=payload.stop_date,
         stop_time=stop_time_obj,
@@ -110,17 +127,82 @@ def create_complaint(payload: ComplaintCreate, db: Session = Depends(get_db)):
         stop_location=payload.stop_location,
         narrative=payload.narrative,
         harm_types=harms,
-        harm_done=", ".join(harms) if harms else (payload.harm_done or None),
+        harm_done=", ".join(harms)
+        if harms
+        else (payload.harm_done or None),
     )
 
     db.add(complaint)
     db.flush()
 
     if payload.officer_ids:
-        set_officers_from_ids(db, complaint, payload.officer_ids)
+        set_officers_from_ids(
+            db,
+            complaint,
+            payload.officer_ids
+        )
 
     db.commit()
     db.refresh(complaint)
+
+    # ---------------------------
+    # Notify staff of new complaint
+    # ---------------------------
+
+    try:
+        summary_parts = []
+
+        if complaint.department:
+            summary_parts.append(
+                f"Department: {complaint.department}"
+            )
+
+        if complaint.stop_location:
+            summary_parts.append(
+                f"Location: {complaint.stop_location}"
+            )
+
+        if complaint.stop_date:
+            summary_parts.append(
+                f"Date: {complaint.stop_date}"
+            )
+
+        summary = "\n".join(summary_parts)
+
+        if complaint.narrative:
+            summary += (
+                "\n\nNarrative:\n"
+                + complaint.narrative[:1000]
+            )
+
+        app_url = os.getenv(
+            "FRONTEND_URL",
+            "https://copstopsd.org"
+        ).rstrip("/")
+
+        complaint_link = (
+            f"{app_url}/complaints/{complaint.id}"
+        )
+
+        send_new_submission_email(
+            case_number=complaint.case_number,
+            summary=summary or "New complaint submitted.",
+            link=complaint_link,
+        )
+
+        print(
+            f"[COMPLAINT ALERT SENT] "
+            f"{complaint.case_number}"
+        )
+
+    except Exception as exc:
+        # Complaint remains successfully submitted even
+        # if the notification email fails.
+        print(
+            f"[COMPLAINT ALERT ERROR] "
+            f"{type(exc).__name__}: {exc}"
+        )
+
     return complaint
 
 
