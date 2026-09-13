@@ -19,7 +19,7 @@ from app.api.deps import get_current_user, require_staff, require_admin, user_to
 from app.db.models import Complaint, ComplaintDocument, ComplaintFollowUp, Officer, User
 from app.db.session import get_db
 from app.schemas import ComplaintCreate, ComplaintOut, ComplaintUpdate
-from app.services.email_service import send_new_submission_email
+from app.services.email import send_new_submission_email
 
 router = APIRouter()
 
