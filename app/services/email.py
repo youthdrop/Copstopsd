@@ -1,38 +1,39 @@
 import os
-import smtplib
-from email.message import EmailMessage
+import resend
+
 
 # ---------------------------
-# Email config (ALL via env vars)
+# Resend email config
 # ---------------------------
-SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 
-# Required (set these in Railway Variables)
-SMTP_USER = os.getenv("SMTP_USER")  # e.g. laila@potcsd.org
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")  # Google App Password (16 chars)
+# Set in Railway as:
+# FROM_EMAIL=CopStopSD <noreply@copstopsd.org>
+FROM_EMAIL = os.getenv(
+    "FROM_EMAIL",
+    "CopStopSD <noreply@copstopsd.org>"
+)
 
-# Optional
-FROM_EMAIL = os.getenv("FROM_EMAIL", SMTP_USER)
+# Email address that receives new complaint notifications
+STAFF_NOTIFICATION_EMAIL = os.getenv("STAFF_NOTIFICATION_EMAIL")
 
 
 def _send_email(subject: str, to_email: str, body: str) -> None:
-    if not SMTP_USER or not SMTP_PASSWORD:
-        raise RuntimeError("SMTP_USER and SMTP_PASSWORD must be set in environment variables")
+    if not RESEND_API_KEY:
+        raise RuntimeError(
+            "RESEND_API_KEY must be set in environment variables"
+        )
 
-    msg = EmailMessage()
-    msg["From"] = FROM_EMAIL
-    msg["To"] = to_email
-    msg["Subject"] = subject
-    msg.set_content(body)
+    resend.api_key = RESEND_API_KEY
 
-    # STARTTLS (recommended for Gmail)
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
-        server.ehlo()
-        server.starttls()
-        server.ehlo()
-        server.login(SMTP_USER, SMTP_PASSWORD)
-        server.send_message(msg)
+    response = resend.Emails.send({
+        "from": FROM_EMAIL,
+        "to": [to_email],
+        "subject": subject,
+        "text": body,
+    })
+
+    print(f"[RESEND] Email sent to {to_email}: {response}")
 
 
 # ---------------------------
@@ -40,7 +41,8 @@ def _send_email(subject: str, to_email: str, body: str) -> None:
 # ---------------------------
 def send_otp_email(to_email: str, otp_code: str) -> None:
     subject = "Your CopStopSD verification code"
-    body = f"""Your verification code is:
+
+    body = f"""Your CopStopSD verification code is:
 
 {otp_code}
 
@@ -48,14 +50,21 @@ This code will expire in 10 minutes.
 
 If you did not request this code, you can ignore this email.
 """
+
     _send_email(subject, to_email, body)
 
 
 # ---------------------------
-# Existing notification email
+# Complaint notification email
 # ---------------------------
-def send_new_submission_email(case_number: str, summary: str, link: str) -> None:
+def send_new_submission_email(
+    case_number: str,
+    summary: str,
+    link: str
+) -> None:
+
     subject = f"New Complaint Submitted — Case {case_number}"
+
     body = f"""A new complaint has been submitted.
 
 Case Number:
@@ -67,9 +76,15 @@ Summary:
 View complaint:
 {link}
 """
-    staff_email = os.getenv("STAFF_NOTIFICATION_EMAIL") or SMTP_USER
-    if not staff_email:
-        raise RuntimeError("STAFF_NOTIFICATION_EMAIL not configured (or SMTP_USER missing)")
 
-    _send_email(subject, staff_email, body)
+    if not STAFF_NOTIFICATION_EMAIL:
+        raise RuntimeError(
+            "STAFF_NOTIFICATION_EMAIL must be set in environment variables"
+        )
+
+    _send_email(
+        subject,
+        STAFF_NOTIFICATION_EMAIL,
+        body
+    )
 
